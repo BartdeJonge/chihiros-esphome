@@ -1,19 +1,17 @@
 # --- WRGB II LED ---
 #
-# Anders dan CO2/roerder/ventilator: geen auth-volgorde nodig.
+# Protocol afgeleid uit btsnoop HCI logs (2026-05-30):
 #
-# Modi:
-#   Manueel — R/G/B brightness direct via number entities (0-100%)
-#   Auto    — intern schema in het apparaat (aan/uit tijd, ramp, piek-helderheid)
+# Connect:          AUTH(0x5a) → RTC → RTC  (lamp onthoudt schema zelf)
+# Auto activeren:   MODE(RESET_AUTO) → MODE(0x05) → SCHEDULE(params)
+# Auto deactiveren: SCHEDULE(delete: R/G/B=0xff) + MODE(0x28)  [2×]
+# Manueel:          MODE(0x0b) → BRIGHTNESS per kanaal
+# Manueel → auto:   MODE(RESET_AUTO) → MODE(0x05) → SCHEDULE
 #
-# Connect sequence (manueel): RTC → restore brightness
-# Connect sequence (auto):    RTC → schema opnieuw sturen
-#
-# Schedule command: hdr::DEVICE, cmd::SCHEDULE
-#   params: [aan_h, aan_m, uit_h, uit_m, ramp_min, weekdays=127, R, G, B, 0xff×5]
-#   Delete = zelfde frame maar R/G/B = 0xff
-#   Reset  = hdr::BASE, cmd::MODE, data=[RESET_SCHEMA, SKIP, SKIP]
-#   Activeer = hdr::BASE, cmd::MODE, data=[RESET_AUTO, SKIP, SKIP] → dan RTC
+# SCHEDULE: hdr::DEVICE(0xa5), cmd=0x19
+#   data: [aan_h, aan_m, uit_h, uit_m, ramp_min, weekdays=0x7f, R, G, B, 0xff×5]
+#   Delete = R/G/B = 0xff
+# BRIGHTNESS: hdr::BASE(0x5a), cmd=0x07, data=[kanaal, waarde]  (0=R, 1=G, 2=B)
 #
 # BELANGRIJK: sequence byte mag nooit 90 (=0x5a = frame header) zijn → next_seq()
 # Ramp-waarde 90 min is ook verboden → wordt 89 min afgerond.
@@ -40,19 +38,25 @@ ble_client:
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
+              ESP_LOGI("wrgb2", "Auth");
+              return chihiros::auth(chihiros::next_seq(id(cmd_seq_wrgb2)));
+        - delay: 200ms
+        - ble_client.ble_write:
+            id: chihiros_wrgb2
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
               auto t = id(ha_time).now();
               ESP_LOGI("wrgb2", "RTC");
               return chihiros::rtc_pakket(t, chihiros::next_seq(id(cmd_seq_wrgb2)));
         - delay: 200ms
-        - if:
-            condition:
-              lambda: return id(wrgb2_auto_modus);
-            then:
-              - script.execute: stuur_wrgb2_schema
-              - script.wait: stuur_wrgb2_schema
-            else:
-              - script.execute: stuur_wrgb2_brightness
-              - script.wait: stuur_wrgb2_brightness
+        - ble_client.ble_write:
+            id: chihiros_wrgb2
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              auto t = id(ha_time).now();
+              return chihiros::rtc_pakket(t, chihiros::next_seq(id(cmd_seq_wrgb2)));
         - logger.log: "WRGB2 verbonden"
     on_disconnect:
       then:
@@ -173,7 +177,7 @@ number:
     min_value: 0
     max_value: 100
     step: 1
-    initial_value: 100
+    initial_value: 0
     restore_value: true
     icon: mdi:led-on
     unit_of_measurement: "%"
@@ -194,7 +198,7 @@ number:
     min_value: 0
     max_value: 100
     step: 1
-    initial_value: 100
+    initial_value: 0
     restore_value: true
     icon: mdi:led-on
     unit_of_measurement: "%"
@@ -215,7 +219,7 @@ number:
     min_value: 0
     max_value: 100
     step: 1
-    initial_value: 100
+    initial_value: 0
     restore_value: true
     icon: mdi:led-on
     unit_of_measurement: "%"

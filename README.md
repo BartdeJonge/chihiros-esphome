@@ -98,14 +98,16 @@ The ESP32 manages multiple BLE clients simultaneously alongside the active scann
 
 ## Supported Devices
 
-| Device | MAC | Status |
-|---|---|---|
-| CO2 Controller | `CC:A0:27:8E:79:E9` | Working |
-| Magnetic Stirrer | `EC:DE:A6:A0:61:1D` | Working |
-| Cooling Fan | `D7:65:2F:EF:CC:BB` | Working |
-| Doctor Mate | `CC:A0:E9:07:34:C6` | Config ready, pending flash |
-| WRGB II | TBD | Config ready, pending MAC |
-| Dosing Pump | TBD | Skeleton ready, pending MAC + protocol |
+| Device | MAC | BLE Name | Status |
+|---|---|---|---|
+| CO2 Controller | `CC:A0:27:8E:79:E9` | `DYPCO2...` | Working |
+| Magnetic Stirrer | `EC:DE:A6:A0:61:1D` | `DYMIX...` | Working |
+| Cooling Fan | `D7:65:2F:EF:CC:BB` | `DYNFAN...` | Working |
+| Doctor Mate | `CC:A0:E9:07:34:C6` | `DYNDOC...` | Config ready, pending flash |
+| WRGB II | `CF:20:3B:6D:17:C1` | `DYNT90...` | Protocol reverse-engineered, pending flash |
+| Dosing Pump | `F1:C0:D0:B8:E9:5A` | `DYDOSE...` | Skeleton ready, pending protocol |
+
+> **Finding MACs:** All Chihiros devices advertise as `DY{type}{MAC_without_colons}`. Enable the BLE scanner in the ESPHome logs to discover new devices automatically.
 
 ## Helper Library (`chihiros_ble.h`)
 
@@ -219,21 +221,26 @@ switch:
 
 ## CO2 Controller
 
-### Connect Sequence
-1. Auth: `BASE`, `AUTH`, `{AUTH_BASE}`
-2. RTC sync
-3. `MODE` + `RESET_SCHEMA`
-4. Schema slots (conditional on current time)
-5. `MODE` + `RESET_SCHEMA`
+> Protocol verified via btsnoop HCI analysis (2026-05-30).
 
-**Do not resend the full schedule on connect** — this causes a solenoid tick.
+### Connect Sequence
+1. `BASE` `AUTH` `{AUTH_BASE}`
+2. RTC sync
+3. RTC sync (second time — required)
+4. `MODE` + `RESET_SCHEMA`
+5. Start slot: `SCHEMA` `[hour, min, CO2_ON/EMPTY]` — ON if schema active, EMPTY if not
+6. End slot: `SCHEMA` `[hour, min, CO2_OFF/EMPTY]`
 
 ### Schedule Update (`stuur_schema` script)
-1. Clear both slots: `SCHEMA` `[hour, min, CO2_EMPTY]`
-2. `MODE` + `RESET_AUTO`
-3. Set ON slot: `SCHEMA` `[hour, min, CO2_ON]`
-4. Set OFF slot: `SCHEMA` `[hour, min, CO2_OFF]`
-5. `MODE` + `RESET_SCHEMA`
+1. `MODE` + `RESET_SCHEMA` — clears **all** slots; no need to track old time values
+2. Start slot: `SCHEMA` `[hour, min, CO2_ON]`
+3. End slot: `SCHEMA` `[hour, min, CO2_OFF]`
+
+### Deactivate (`deactiveer_schema` script)
+1. Start slot: `SCHEMA` `[hour, min, CO2_EMPTY]`
+2. End slot: `SCHEMA` `[hour, min, CO2_EMPTY]`
+
+> Active/inactive state is stored in an ESPHome global (`co2_schema_actief`, `restore_value: true`) so the correct slot values are sent after a reconnect.
 
 ---
 
@@ -310,38 +317,39 @@ Speed encoding: HA 0–100% → device 0–127 (multiply by `127/100`).
 
 ## WRGB II
 
-Protocol source: [TheMicDiet/chihiros-led-control](https://github.com/TheMicDiet/chihiros-led-control)
+> Protocol verified via btsnoop HCI analysis (2026-05-30).
 
-No auth needed. Supports manual mode (direct brightness) and auto mode (internal schedule).
+The lamp stores its schedule internally and runs autonomously when disconnected. The ESP32 only needs to send AUTH + RTC on connect.
 
 ### Connect Sequence
-- **Manual mode**: RTC → restore brightness per channel
-- **Auto mode**: RTC → `stuur_wrgb2_schema` (reset + schedule + activate)
+1. `BASE` `AUTH` `{AUTH_BASE}`
+2. RTC sync
+3. RTC sync (second time — required)
 
 ### Manual Brightness
 ```
-BASE  BRIGHTNESS  {WRGB_R/G/B, brightness_0_100}
+BASE  BRIGHTNESS  {WRGB_R/G/B, brightness}
 ```
+Enter manual mode first: `BASE` `MODE` `{0x0b, SKIP, SKIP}`
 
 ### Schedule (auto mode)
-```
-DEVICE  SCHEDULE  {on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B, 0xff×5}
-```
 
-| Field | Notes |
+#### Activate
+1. `BASE` `MODE` `{RESET_AUTO, SKIP, SKIP}`
+2. `BASE` `MODE` `{0x05, SKIP, SKIP}`
+3. `DEVICE` `SCHEDULE` `{on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B, 0xff×5}`
+
+#### Deactivate
+Send twice (app behavior — reason unclear but required):
+1. `DEVICE` `SCHEDULE` `{on_h, on_m, off_h, off_m, ramp_min, weekdays, 0xff, 0xff, 0xff, 0xff×5}` — R/G/B=0xff = delete
+2. `BASE` `MODE` `{0x28, SKIP, SKIP}`
+
+| Schedule field | Notes |
 |---|---|
 | `ramp_min` | Fade duration 0–150 min. Value 90 is forbidden (= 0x5a) → use 89 |
 | `weekdays` | Bitmask: Mon=64, Tue=32, Wed=16, Thu=8, Fri=4, Sat=2, Sun=1; 127=every day |
-| `R/G/B` | Peak brightness 0–100 per channel |
+| `R/G/B` | Peak brightness 0–100 per channel; `0xff` = delete marker |
 | `0xff×5` | Padding |
-
-Delete schedule = same frame with R/G/B = `0xff`.
-
-#### Activate auto mode
-1. `BASE` `MODE` `{RESET_SCHEMA, SKIP, SKIP}` — clear all schedules
-2. `DEVICE` `SCHEDULE` `{...}` — add schedule
-3. `BASE` `MODE` `{RESET_AUTO, SKIP, SKIP}` — activate
-4. RTC — device evaluates schedule against current time
 
 ---
 

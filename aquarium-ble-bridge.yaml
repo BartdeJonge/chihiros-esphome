@@ -1,10 +1,11 @@
 # --- SAMENVATTING ---
-# Chihiros BLE bridge — CO2 controller + magnetisch roerder + koelventilator + Doctor Mate
+# Chihiros BLE bridge — CO2 controller + magnetisch roerder + koelventilator + Doctor Mate + WRGB2
 # Configuratie gesplitst in packages per device:
 #   aquarium-ble-bridge-co2.yaml
 #   aquarium-ble-bridge-roerder.yaml
 #   aquarium-ble-bridge-ventilator.yaml
 #   aquarium-ble-bridge-doctor.yaml
+#   aquarium-ble-bridge-wrgb2.yaml
 
 substitutions:
   name: aquarium-ble-bridge
@@ -14,8 +15,8 @@ substitutions:
   roerder_mac: "EC:DE:A6:A0:61:1D"
   ventilator_mac: "D7:65:2F:EF:CC:BB"
   doctor_mac: "CC:A0:E9:07:34:C6"
-  wrgb2_mac:  "00:00:00:00:00:00"   # TODO: invullen na MAC-scan
-  dosing_mac: "00:00:00:00:00:00"   # TODO: invullen na MAC-scan
+  wrgb2_mac:  "CF:20:3B:6D:17:C1"
+  dosing_mac: "F1:C0:D0:B8:E9:5A"
   # Nordic UART Service UUIDs (gedeeld door alle Chihiros devices)
   ble_service: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
   ble_tx: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
@@ -66,11 +67,21 @@ esp32_ble_tracker:
     - mac_address: ${co2_mac}
       then:
         - lambda: ESP_LOGI("co2", "CO2 controller gevonden! RSSI=%d", x.get_rssi());
+    - then:
+        - lambda: |-
+            std::string name = x.get_name();
+            std::string mac = x.address_str();
+            if (name.rfind("DY", 0) != 0) return;
+            if (mac == "${co2_mac}" || mac == "${roerder_mac}" ||
+                mac == "${ventilator_mac}" || mac == "${doctor_mac}" ||
+                mac == "${wrgb2_mac}" || mac == "${dosing_mac}") return;
+            ESP_LOGI("ble_scan", "Onbekend Chihiros device! MAC=%s naam='%s' RSSI=%d",
+              mac.c_str(), name.c_str(), x.get_rssi());
 
 packages:
-  # co2:      !include aquarium-ble-bridge-co2.yaml      # tijdelijk uitgeschakeld
+  co2:        !include aquarium-ble-bridge-co2.yaml
   roerder:    !include aquarium-ble-bridge-roerder.yaml
   ventilator: !include aquarium-ble-bridge-ventilator.yaml
   doctor:     !include aquarium-ble-bridge-doctor.yaml
-  # wrgb2:    !include aquarium-ble-bridge-wrgb2.yaml    # wacht op MAC-adres
+  # wrgb2:    !include aquarium-ble-bridge-wrgb2.yaml    # tijdelijk uitgeschakeld
   # dosing:   !include aquarium-ble-bridge-dosing.yaml  # wacht op MAC + protocol sniffing
