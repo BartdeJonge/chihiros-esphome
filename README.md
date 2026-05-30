@@ -1,7 +1,5 @@
 # Chihiros BLE Bridge — ESPHome
 
-ESPHome configuration for an ESP32-S3 BLE bridge that controls Chihiros aquarium devices via Home Assistant, without the Chihiros app.
-
 ## How it works (non-technical)
 
 Chihiros aquarium devices (CO2 controller, stirrer, fan, Doctor Mate, WRGB2 light, dosing pump) communicate via **Bluetooth Low Energy (BLE)**. Normally you control them through the Chihiros app on your phone.
@@ -85,6 +83,10 @@ If a device doesn't connect, move the ESP32 closer to the aquarium and retry.
 The ESP32 will appear automatically in Home Assistant as a new device. All controls (sliders, buttons, switches) are immediately available.
 
 ---
+
+---
+
+ESPHome configuration for an ESP32-S3 BLE bridge that controls Chihiros aquarium devices via Home Assistant, without the Chihiros app.
 
 ## Hardware
 
