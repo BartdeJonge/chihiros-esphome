@@ -47,7 +47,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("ventilator", "Auth");
-              return chihiros::pakket(0x5a, 0x04, {0x01}, id(cmd_seq_ventilator)++);
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::AUTH, {chihiros::data::AUTH_BASE}, id(cmd_seq_ventilator)++);
         - delay: 200ms
         # Stap 2a: RTC sync (eerste keer, met log)
         - ble_client.ble_write:
@@ -57,10 +57,7 @@ ble_client:
             value: !lambda |-
               auto t = id(ha_time).now();
               ESP_LOGI("ventilator", "RTC");
-              return chihiros::pakket(0x5a, 0x09, {
-                (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
-                (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second
-              }, id(cmd_seq_ventilator)++);
+              return chihiros::rtc_pakket(t, id(cmd_seq_ventilator)++);
         - delay: 200ms
         # Stap 2b: RTC sync (tweede keer — zo doet de app het ook)
         - ble_client.ble_write:
@@ -69,10 +66,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               auto t = id(ha_time).now();
-              return chihiros::pakket(0x5a, 0x09, {
-                (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
-                (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second
-              }, id(cmd_seq_ventilator)++);
+              return chihiros::rtc_pakket(t, id(cmd_seq_ventilator)++);
         - delay: 200ms
         # Stap 3: extra auth [06] — ventilator-specifiek, doel onbekend
         - ble_client.ble_write:
@@ -81,7 +75,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("ventilator", "Extra auth [06]");
-              return chihiros::pakket(0xa5, 0x04, {0x06}, id(cmd_seq_ventilator)++);
+              return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::AUTH, {chihiros::data::AUTH_EXT1}, id(cmd_seq_ventilator)++);
         - delay: 200ms
         # Stap 4: extra auth [08] — ventilator-specifiek, doel onbekend
         - ble_client.ble_write:
@@ -90,7 +84,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("ventilator", "Extra auth [08]");
-              return chihiros::pakket(0xa5, 0x04, {0x08}, id(cmd_seq_ventilator)++);
+              return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::AUTH, {chihiros::data::AUTH_EXT2}, id(cmd_seq_ventilator)++);
         - delay: 200ms
         # Stap 5: herstel silent mode op basis van de opgeslagen global
         - ble_client.ble_write:
@@ -98,9 +92,14 @@ ble_client:
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
-              uint8_t mode = id(ventilator_silent_mode) ? 0x22 : 0x23;
-              ESP_LOGI("ventilator", "Mode init: %s", mode == 0x22 ? "silent" : "normaal");
-              return chihiros::pakket(0x5a, 0x05, {mode, 0xff, 0xff}, id(cmd_seq_ventilator)++);
+              uint8_t mode = id(ventilator_silent_mode) ? chihiros::data::SILENT_ON : chihiros::data::SILENT_OFF;
+              ESP_LOGI("ventilator", "Mode init: %s", mode == chihiros::data::SILENT_ON ? "silent" : "normaal");
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
+                {mode, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        # Stap 6: herstel temperatuurdrempels (apparaat vergeet deze na stroomonderbreking)
+        - script.execute: stuur_ventilator_drempel
+        - script.wait: stuur_ventilator_drempel
         - logger.log: "Ventilator verbonden"
     on_disconnect:
       then:
@@ -117,9 +116,10 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t mode = id(ventilator_silent_mode) ? 0x22 : 0x23;
-            ESP_LOGI("ventilator", "Silent mode: %s", mode == 0x22 ? "AAN" : "UIT");
-            return chihiros::pakket(0x5a, 0x05, {mode, 0xff, 0xff}, id(cmd_seq_ventilator)++);
+            uint8_t mode = id(ventilator_silent_mode) ? chihiros::data::SILENT_ON : chihiros::data::SILENT_OFF;
+            ESP_LOGI("ventilator", "Silent mode: %s", mode == chihiros::data::SILENT_ON ? "AAN" : "UIT");
+            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
+              {mode, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_ventilator)++);
 
   # Stuurt de temperatuurdrempels naar het apparaat.
   # Wordt aangeroepen als start- of max-temperatuur wijzigt in HA.
@@ -134,7 +134,8 @@ script:
             uint8_t start = (uint8_t)id(num_ventilator_start_temp).state;
             uint8_t max   = (uint8_t)id(num_ventilator_max_temp).state;
             ESP_LOGI("ventilator", "Drempel start=%d max=%d", start, max);
-            return chihiros::pakket(0xa5, 0x21, {start, max, 0xff}, id(cmd_seq_ventilator)++);
+            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::TEMP_THRESH,
+              {start, max, chihiros::data::SKIP}, id(cmd_seq_ventilator)++);
 
 switch:
   # Interne verbindingsschakelaar — houdt de BLE-link altijd actief
@@ -213,7 +214,8 @@ number:
             value: !lambda |-
               uint8_t speed = (uint8_t)x;
               ESP_LOGI("ventilator", "Snelheid=%d", speed);
-              return chihiros::pakket(0x5a, 0x07, {0xff, speed}, id(cmd_seq_ventilator)++);
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::FAN_SPEED,
+                {chihiros::data::SKIP, speed}, id(cmd_seq_ventilator)++);
 
 sensor:
   - platform: ble_client

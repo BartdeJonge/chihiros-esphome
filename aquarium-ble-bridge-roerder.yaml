@@ -56,7 +56,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("roerder", "Auth");
-              return chihiros::pakket(0x5a, 0x04, {0x01}, id(cmd_seq_roerder)++);
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::AUTH, {chihiros::data::AUTH_BASE}, id(cmd_seq_roerder)++);
         - delay: 200ms
         # Stap 2: RTC sync — roerder gebruikt de klok voor zijn timer-schema
         - ble_client.ble_write:
@@ -66,10 +66,7 @@ ble_client:
             value: !lambda |-
               auto t = id(ha_time).now();
               ESP_LOGI("roerder", "RTC %04d-%02d-%02d %02d:%02d:%02d", t.year, t.month, t.day_of_month, t.hour, t.minute, t.second);
-              return chihiros::pakket(0x5a, 0x09, {
-                (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
-                (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second
-              }, id(cmd_seq_roerder)++);
+              return chihiros::rtc_pakket(t, id(cmd_seq_roerder)++);
         - delay: 200ms
         # Stap 3+4: config + staat-herstel via script (zie hieronder)
         - script.execute: stuur_roerder_config
@@ -92,7 +89,7 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            return chihiros::pakket(0xa5, 0x20, {(uint8_t)kanaal, 0x00, 0x01}, id(cmd_seq_roerder)++);
+            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::STIR_ENABLE, {(uint8_t)kanaal, 0x00, 0x01}, id(cmd_seq_roerder)++);
       - delay: 100ms
       # Snelheid: 0-100% uit HA → omrekenen naar 0-127 (apparaat-schaal)
       - ble_client.ble_write:
@@ -104,7 +101,7 @@ script:
                                  id(roerder_k2_snelheid).state, id(roerder_k3_snelheid).state};
             uint8_t spd = (uint8_t)(snelheden[kanaal] * 127.0 / 100.0);
             ESP_LOGI("roerder", "K%d snelheid=%d", kanaal, spd);
-            return chihiros::pakket(0xa5, 0x1b, {(uint8_t)kanaal, spd, 0x01, 0x00, 0x00, 0x00}, id(cmd_seq_roerder)++);
+            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::STIR_SPEED, {(uint8_t)kanaal, spd, 0x01, 0x00, 0x00, 0x00}, id(cmd_seq_roerder)++);
       - delay: 100ms
       # Timer: aan-duur en herhalingsinterval in minuten
       - ble_client.ble_write:
@@ -117,7 +114,7 @@ script:
             uint8_t intervallen[] = {(uint8_t)id(roerder_k0_interval).state, (uint8_t)id(roerder_k1_interval).state,
                                      (uint8_t)id(roerder_k2_interval).state, (uint8_t)id(roerder_k3_interval).state};
             ESP_LOGI("roerder", "K%d duur=%d interval=%d", kanaal, duren[kanaal], intervallen[kanaal]);
-            return chihiros::pakket(0xa5, 0x15, {(uint8_t)kanaal, 0x00, duren[kanaal], intervallen[kanaal], 0x00, 0x00}, id(cmd_seq_roerder)++);
+            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::STIR_TIMER, {(uint8_t)kanaal, 0x00, duren[kanaal], intervallen[kanaal], 0x00, 0x00}, id(cmd_seq_roerder)++);
       - delay: 100ms
 
   # Herstelt de aan/uit staat van alle 4 kanalen in één BLE write.
@@ -135,7 +132,9 @@ script:
             uint8_t k2 = id(roerder_k2_aan) ? 0x01 : 0x00;
             uint8_t k3 = id(roerder_k3_aan) ? 0x01 : 0x00;
             ESP_LOGI("roerder", "Herstel K0=%d K1=%d K2=%d K3=%d", k0, k1, k2, k3);
-            return chihiros::pakket(0xa5, 0x14, {0xff, 0xff, k0, k1, k2, k3, 0xff, 0xff, 0xff, 0xff}, id(cmd_seq_roerder)++);
+            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::STIR_TOGGLE,
+              {chihiros::data::SKIP, chihiros::data::SKIP, k0, k1, k2, k3,
+               chihiros::data::SKIP, chihiros::data::SKIP, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_roerder)++);
 
   # Volledige initialisatie: config voor alle 4 kanalen → apply → staat-herstel.
   # script.wait zorgt dat elk kanaal klaar is voor het volgende begint.
@@ -164,7 +163,7 @@ script:
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
             ESP_LOGI("roerder", "Config toegepast");
-            return chihiros::pakket(0xa5, 0x1f, {0x00}, id(cmd_seq_roerder)++);
+            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::STIR_APPLY, {0x00}, id(cmd_seq_roerder)++);
       - delay: 100ms
       - script.execute: herstel_roerder_staat
       - script.wait: herstel_roerder_staat

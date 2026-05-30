@@ -1,7 +1,6 @@
 # --- CO2 CONTROLLER ---
-# Protocol: auth → RTC → Reset Auto Settings
-# Schema: cmd=0x16 [uur, min, 0x64/0x00/0x6f]
-# Reset Auto Settings (0x05 [07 ff ff]) evalueert schema op huidig tijdstip
+# Connect sequence: AUTH → RTC → MODE(RESET_SCHEMA) → schema slots → MODE(RESET_SCHEMA)
+# Schedule update: clear slots → MODE(RESET_AUTO) → set slots → MODE(RESET_SCHEMA)
 
 globals:
   - id: cmd_seq_co2
@@ -20,11 +19,9 @@ ble_client:
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
-              uint8_t seq = id(cmd_seq_co2)++;
-              std::vector<uint8_t> frame = {0x01, 0x06, 0x00, seq, 0x04, 0x01};
-              uint8_t crc = 0; for (auto b : frame) crc ^= b;
-              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-              ESP_LOGI("co2", "Auth"); return p;
+              ESP_LOGI("co2", "Auth");
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::AUTH,
+                {chihiros::data::AUTH_BASE}, id(cmd_seq_co2)++);
         - delay: 200ms
         - ble_client.ble_write:
             id: chihiros_co2
@@ -32,25 +29,17 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               auto t = id(ha_time).now();
-              uint8_t seq = id(cmd_seq_co2)++;
-              std::vector<uint8_t> frame = {0x01, 0x0b, 0x00, seq, 0x09,
-                (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
-                (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second};
-              uint8_t crc = 0; for (auto b : frame) crc ^= b;
-              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
               ESP_LOGI("co2", "RTC %04d-%02d-%02d %02d:%02d:%02d", t.year, t.month, t.day_of_month, t.hour, t.minute, t.second);
-              return p;
+              return chihiros::rtc_pakket(t, id(cmd_seq_co2)++);
         - delay: 200ms
         - ble_client.ble_write:
             id: chihiros_co2
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
-              uint8_t seq = id(cmd_seq_co2)++;
-              std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x05, 0x07, 0xFF, 0xFF};
-              uint8_t crc = 0; for (auto b : frame) crc ^= b;
-              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-              ESP_LOGI("co2", "Reset Auto Settings"); return p;
+              ESP_LOGI("co2", "Reset Auto Settings");
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
+                {chihiros::data::RESET_SCHEMA, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_co2)++);
         - delay: 200ms
         # Schema sturen op connect: AAN als we binnen het schema zitten, anders leeg (klep dicht)
         - ble_client.ble_write:
@@ -59,19 +48,15 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               auto t = id(ha_time).now();
-              uint8_t seq = id(cmd_seq_co2)++;
               uint8_t h = (uint8_t)id(co2_start_uur).state;
               uint8_t m = (uint8_t)id(co2_start_min).state;
               int nu = t.hour * 60 + t.minute;
               int start = (int)id(co2_start_uur).state * 60 + (int)id(co2_start_min).state;
               int eind  = (int)id(co2_eind_uur).state  * 60 + (int)id(co2_eind_min).state;
               bool actief = (start <= eind) ? (nu >= start && nu < eind) : (nu >= start || nu < eind);
-              uint8_t waarde = actief ? 0x64 : 0x6f;
-              std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, waarde};
-              uint8_t crc = 0; for (auto b : frame) crc ^= b;
-              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+              uint8_t waarde = actief ? chihiros::data::CO2_ON : chihiros::data::CO2_EMPTY;
               ESP_LOGI("co2", "Connect: start slot %02d:%02d -> %s", h, m, actief ? "AAN" : "LEEG");
-              return p;
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA, {h, m, waarde}, id(cmd_seq_co2)++);
         - delay: 100ms
         - ble_client.ble_write:
             id: chihiros_co2
@@ -79,30 +64,24 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               auto t = id(ha_time).now();
-              uint8_t seq = id(cmd_seq_co2)++;
               uint8_t h = (uint8_t)id(co2_eind_uur).state;
               uint8_t m = (uint8_t)id(co2_eind_min).state;
               int nu = t.hour * 60 + t.minute;
               int start = (int)id(co2_start_uur).state * 60 + (int)id(co2_start_min).state;
               int eind  = (int)id(co2_eind_uur).state  * 60 + (int)id(co2_eind_min).state;
               bool actief = (start <= eind) ? (nu >= start && nu < eind) : (nu >= start || nu < eind);
-              uint8_t waarde = actief ? 0x00 : 0x6f;
-              std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, waarde};
-              uint8_t crc = 0; for (auto b : frame) crc ^= b;
-              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+              uint8_t waarde = actief ? chihiros::data::CO2_OFF : chihiros::data::CO2_EMPTY;
               ESP_LOGI("co2", "Connect: eind slot %02d:%02d -> %s", h, m, actief ? "UIT" : "LEEG");
-              return p;
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA, {h, m, waarde}, id(cmd_seq_co2)++);
         - delay: 100ms
         - ble_client.ble_write:
             id: chihiros_co2
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
-              uint8_t seq = id(cmd_seq_co2)++;
-              std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x05, 0x07, 0xFF, 0xFF};
-              uint8_t crc = 0; for (auto b : frame) crc ^= b;
-              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-              ESP_LOGI("co2", "Reset Auto Settings (schema activeren)"); return p;
+              ESP_LOGI("co2", "Reset Auto Settings (schema activeren)");
+              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
+                {chihiros::data::RESET_SCHEMA, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_co2)++);
         - logger.log: "CO2 verbonden"
     on_disconnect:
       then:
@@ -117,26 +96,22 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t seq = id(cmd_seq_co2)++;
             uint8_t h = (uint8_t)id(co2_start_uur).state;
             uint8_t m = (uint8_t)id(co2_start_min).state;
-            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, 0x6f};
-            uint8_t crc = 0; for (auto b : frame) crc ^= b;
-            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-            ESP_LOGI("co2", "Schema leeg start=%02d:%02d", h, m); return p;
+            ESP_LOGI("co2", "Schema leeg start=%02d:%02d", h, m);
+            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA,
+              {h, m, chihiros::data::CO2_EMPTY}, id(cmd_seq_co2)++);
       - delay: 100ms
       - ble_client.ble_write:
           id: chihiros_co2
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t seq = id(cmd_seq_co2)++;
             uint8_t h = (uint8_t)id(co2_eind_uur).state;
             uint8_t m = (uint8_t)id(co2_eind_min).state;
-            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, 0x6f};
-            uint8_t crc = 0; for (auto b : frame) crc ^= b;
-            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-            ESP_LOGI("co2", "Schema leeg eind=%02d:%02d", h, m); return p;
+            ESP_LOGI("co2", "Schema leeg eind=%02d:%02d", h, m);
+            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA,
+              {h, m, chihiros::data::CO2_EMPTY}, id(cmd_seq_co2)++);
       - delay: 100ms
       # Stap 2: Switch to Auto Mode — device evalueert leeg schema → klep dicht
       - ble_client.ble_write:
@@ -144,11 +119,9 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t seq = id(cmd_seq_co2)++;
-            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x05, 0x12, 0xFF, 0xFF};
-            uint8_t crc = 0; for (auto b : frame) crc ^= b;
-            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-            ESP_LOGI("co2", "Switch to Auto Mode (leeg)"); return p;
+            ESP_LOGI("co2", "Switch to Auto Mode (leeg)");
+            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
+              {chihiros::data::RESET_AUTO, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_co2)++);
       - delay: 300ms
       # Stap 3: nieuw schema instellen
       - ble_client.ble_write:
@@ -156,26 +129,22 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t seq = id(cmd_seq_co2)++;
             uint8_t h = (uint8_t)id(co2_start_uur).state;
             uint8_t m = (uint8_t)id(co2_start_min).state;
-            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, 0x64};
-            uint8_t crc = 0; for (auto b : frame) crc ^= b;
-            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-            ESP_LOGI("co2", "Schema start=%02d:%02d", h, m); return p;
+            ESP_LOGI("co2", "Schema start=%02d:%02d", h, m);
+            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA,
+              {h, m, chihiros::data::CO2_ON}, id(cmd_seq_co2)++);
       - delay: 100ms
       - ble_client.ble_write:
           id: chihiros_co2
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t seq = id(cmd_seq_co2)++;
             uint8_t h = (uint8_t)id(co2_eind_uur).state;
             uint8_t m = (uint8_t)id(co2_eind_min).state;
-            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, 0x00};
-            uint8_t crc = 0; for (auto b : frame) crc ^= b;
-            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-            ESP_LOGI("co2", "Schema eind=%02d:%02d", h, m); return p;
+            ESP_LOGI("co2", "Schema eind=%02d:%02d", h, m);
+            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA,
+              {h, m, chihiros::data::CO2_OFF}, id(cmd_seq_co2)++);
       - delay: 100ms
       # Stap 4: Reset Auto Settings — evalueert schema op huidig tijdstip
       - ble_client.ble_write:
@@ -183,11 +152,9 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t seq = id(cmd_seq_co2)++;
-            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x05, 0x07, 0xFF, 0xFF};
-            uint8_t crc = 0; for (auto b : frame) crc ^= b;
-            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-            ESP_LOGI("co2", "Reset Auto Settings (schema activeren)"); return p;
+            ESP_LOGI("co2", "Reset Auto Settings (schema activeren)");
+            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
+              {chihiros::data::RESET_SCHEMA, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_co2)++);
 
 switch:
   - platform: ble_client
@@ -223,13 +190,8 @@ button:
                 characteristic_uuid: ${ble_tx}
                 value: !lambda |-
                   auto t = id(ha_time).now();
-                  uint8_t seq = id(cmd_seq_co2)++;
-                  std::vector<uint8_t> frame = {0x01, 0x0b, 0x00, seq, 0x09,
-                    (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
-                    (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second};
-                  uint8_t crc = 0; for (auto b : frame) crc ^= b;
-                  std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-                  ESP_LOGI("co2", "RTC sync"); return p;
+                  ESP_LOGI("co2", "RTC sync");
+                  return chihiros::rtc_pakket(t, id(cmd_seq_co2)++);
       - if:
           condition:
             switch.is_on: roerder_verbinding
@@ -240,13 +202,8 @@ button:
                 characteristic_uuid: ${ble_tx}
                 value: !lambda |-
                   auto t = id(ha_time).now();
-                  uint8_t seq = id(cmd_seq_roerder)++;
-                  std::vector<uint8_t> frame = {0x01, 0x0b, 0x00, seq, 0x09,
-                    (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
-                    (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second};
-                  uint8_t crc = 0; for (auto b : frame) crc ^= b;
-                  std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
-                  ESP_LOGI("roerder", "RTC sync"); return p;
+                  ESP_LOGI("roerder", "RTC sync");
+                  return chihiros::rtc_pakket(t, id(cmd_seq_roerder)++);
 
 sensor:
   - platform: homeassistant

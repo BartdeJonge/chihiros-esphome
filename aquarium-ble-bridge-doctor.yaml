@@ -42,7 +42,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("doctor", "Auth");
-              return chihiros::pakket(0xa5, 0x04, {0x01}, id(cmd_seq_doctor)++);
+              return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::AUTH, {chihiros::data::AUTH_BASE}, id(cmd_seq_doctor)++);
         - delay: 200ms
         # Stap 2: RTC sync
         - ble_client.ble_write:
@@ -52,10 +52,7 @@ ble_client:
             value: !lambda |-
               auto t = id(ha_time).now();
               ESP_LOGI("doctor", "RTC");
-              return chihiros::pakket(0x5a, 0x09, {
-                (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
-                (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second
-              }, id(cmd_seq_doctor)++);
+              return chihiros::rtc_pakket(t, id(cmd_seq_doctor)++);
         - delay: 200ms
         # Stap 3+4: TDS (positie 1) en Volume (positie 2) — altijd via script, volgorde essentieel
         - script.execute: stuur_doctor_instellingen
@@ -75,7 +72,7 @@ script:
           value: !lambda |-
             uint8_t ec = (uint8_t)roundf(id(num_doctor_tds).state / 0.4f);
             ESP_LOGI("doctor", "TDS %d ppm → EC %d µS/cm (0x%02x)", (int)id(num_doctor_tds).state, ec, ec);
-            return chihiros::pakket(0xa5, 0x01, {0x00, ec}, id(cmd_seq_doctor)++);
+            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::SETTINGS, {0x00, ec}, id(cmd_seq_doctor)++);
       - delay: 200ms
       - ble_client.ble_write:
           id: chihiros_doctor
@@ -84,7 +81,7 @@ script:
           value: !lambda |-
             uint8_t vol = (uint8_t)(id(num_doctor_volume).state * 2.0f);
             ESP_LOGI("doctor", "Volume %d L → %d (0x%02x)", (int)id(num_doctor_volume).state, vol, vol);
-            return chihiros::pakket(0xa5, 0x01, {0x00, vol}, id(cmd_seq_doctor)++);
+            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::SETTINGS, {0x00, vol}, id(cmd_seq_doctor)++);
       - logger.log: "Doctor Mate instellingen gestuurd"
 
 switch:

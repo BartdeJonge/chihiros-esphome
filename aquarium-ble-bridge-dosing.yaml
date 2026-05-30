@@ -1,0 +1,105 @@
+# --- CHIHIROS DOSING PUMP ---
+#
+# STATUS: skeleton — verbinding + logging werkend, dosis-commando's nog onbekend.
+#
+# TODO na BLE-sniffing met de Chihiros app:
+#   - CMD_DOSE_MANUAL : handmatige dosis starten
+#   - CMD_DOSE_CONFIG : dosis-volume instellen (mL, encoding onbekend)
+#   - CMD_DOSE_SCHED  : schema (tijd, weekdagen, volume)
+#   - Notificatie bytes ontcijferen (status, volume, fout?)
+#
+# Aannames op basis van Doctor Mate (zelfde protocol-familie):
+#   - Auth: hdr::DEVICE, cmd::AUTH, {data::AUTH_BASE}
+#   - RTC: zelfde patroon
+#   - Frame format: identiek
+
+globals:
+  - id: cmd_seq_dosing
+    type: uint8_t
+    restore_value: false
+    initial_value: '1'
+
+ble_client:
+  - mac_address: ${dosing_mac}
+    id: chihiros_dosing
+    on_connect:
+      then:
+        - delay: 500ms
+        # Stap 1: auth (zelfde als Doctor Mate — aanname, bevestig via logs)
+        - ble_client.ble_write:
+            id: chihiros_dosing
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              ESP_LOGI("dosing", "Auth");
+              return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::AUTH,
+                {chihiros::data::AUTH_BASE}, id(cmd_seq_dosing)++);
+        - delay: 200ms
+        # Stap 2: RTC sync
+        - ble_client.ble_write:
+            id: chihiros_dosing
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              auto t = id(ha_time).now();
+              ESP_LOGI("dosing", "RTC");
+              return chihiros::rtc_pakket(t, id(cmd_seq_dosing)++);
+        # TODO: stap 3 — instellingen sturen als de commando's bekend zijn
+        - logger.log: "Dosing pump verbonden — check logs voor notificatie bytes"
+    on_disconnect:
+      then:
+        - logger.log: "Dosing pump verbinding verbroken"
+
+switch:
+  - platform: ble_client
+    ble_client_id: chihiros_dosing
+    id: dosing_verbinding
+    internal: true
+    restore_mode: ALWAYS_ON
+
+button:
+  # TODO: invullen zodra CMD_DOSE_MANUAL bekend is
+  - platform: template
+    name: "Dosing handmatige dosis"
+    id: btn_dosing_manual
+    icon: mdi:eyedropper
+    on_press:
+      - if:
+          condition:
+            switch.is_on: dosing_verbinding
+          then:
+            - logger.log: "TODO: handmatige dosis — commando nog onbekend"
+            # - ble_client.ble_write:
+            #     id: chihiros_dosing
+            #     service_uuid: ${ble_service}
+            #     characteristic_uuid: ${ble_tx}
+            #     value: !lambda |-
+            #       return chihiros::pakket(chihiros::hdr::DEVICE, CMD_DOSE_MANUAL,
+            #         {volume_byte}, id(cmd_seq_dosing)++);
+
+sensor:
+  - platform: ble_client
+    type: rssi
+    ble_client_id: chihiros_dosing
+    name: "Dosing RSSI"
+    update_interval: 60s
+
+  # Logt alle notificaties — gebruik dit na eerste connect om het protocol te ontcijferen.
+  # Kijk naar:
+  #   - Welke bytes veranderen bij een handmatige dosis
+  #   - Welke bytes de status / foutcode bevatten
+  #   - Welke bytes het ingestelde volume bevatten
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: chihiros_dosing
+    service_uuid: ${ble_service}
+    characteristic_uuid: ${ble_rx}
+    id: dosing_notificatie
+    name: "Dosing Notificatie"
+    notify: true
+    internal: true
+    unit_of_measurement: ""
+    lambda: |-
+      ESP_LOGI("dosing", "Notificatie (%d bytes):", x.size());
+      for (int i = 0; i < (int)x.size(); i++) ESP_LOGI("dosing", "  [%d] = 0x%02x (%d)", i, x[i], x[i]);
+      return NAN;

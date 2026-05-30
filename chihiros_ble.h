@@ -3,23 +3,54 @@
 #include <cstdint>
 #include <initializer_list>
 
-// Hulpfuncties voor het Chihiros BLE protocol.
-//
-// Alle Chihiros devices (roerder, ventilator, CO2) gebruiken hetzelfde frameformaat:
-//
-//   [header] [01] [len] [00] [seq] [cmd] [data...] [XOR-CRC]
-//
-//   header : 0x5a voor auth/RTC/ventilator-mode, 0xa5 voor roerder/drempel
-//   len    : totaal aantal bytes in het frame (van 0x01 t/m laatste data-byte)
-//   seq    : oplopende teller per device, reset bij elke reconnect
-//   cmd    : commando-code (apparaat-specifiek)
-//   data   : payload, lengte varieert per commando
-//   CRC    : XOR van alle frame-bytes (exclusief header en CRC zelf)
+// Chihiros Nordic UART protocol helpers.
+// Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
+// header BASE (0x5a): auth, RTC, CO2, fan mode/speed
+// header DEVICE (0xa5): stirrer, fan threshold, Doctor Mate
 
 namespace chihiros {
 
+namespace hdr {
+  constexpr uint8_t BASE   = 0x5a;
+  constexpr uint8_t DEVICE = 0xa5;
+}
+
+namespace cmd {
+  constexpr uint8_t AUTH        = 0x04;
+  constexpr uint8_t RTC         = 0x09;
+  constexpr uint8_t MODE        = 0x05;  // CO2 reset / fan mode init
+  constexpr uint8_t SCHEMA      = 0x16;  // CO2 schedule time slots
+  constexpr uint8_t FAN_SPEED   = 0x07;  // fan manual speed
+  constexpr uint8_t BRIGHTNESS  = 0x07;  // WRGB2 per-channel brightness (same byte as FAN_SPEED)
+  constexpr uint8_t SETTINGS    = 0x01;  // Doctor Mate TDS / volume
+  constexpr uint8_t SCHEDULE    = 0x19;  // WRGB2 auto schedule (add/delete)
+  constexpr uint8_t STIR_TOGGLE = 0x14;
+  constexpr uint8_t STIR_TIMER  = 0x15;
+  constexpr uint8_t STIR_SPEED  = 0x1b;
+  constexpr uint8_t STIR_ENABLE = 0x20;
+  constexpr uint8_t STIR_APPLY  = 0x1f;
+  constexpr uint8_t TEMP_THRESH = 0x21;
+}
+
+namespace data {
+  constexpr uint8_t AUTH_BASE    = 0x01;
+  constexpr uint8_t AUTH_EXT1    = 0x06;  // fan extra auth step 1
+  constexpr uint8_t AUTH_EXT2    = 0x08;  // fan extra auth step 2
+  constexpr uint8_t RESET_SCHEMA = 0x07;  // CO2: evaluate schedule now
+  constexpr uint8_t RESET_AUTO   = 0x12;  // CO2: switch to auto mode
+  constexpr uint8_t SILENT_ON    = 0x22;
+  constexpr uint8_t SILENT_OFF   = 0x23;
+  constexpr uint8_t CO2_ON       = 0x64;
+  constexpr uint8_t CO2_OFF      = 0x00;
+  constexpr uint8_t CO2_EMPTY    = 0x6f;  // schedule slot unused
+  constexpr uint8_t SKIP         = 0xff;  // don't touch this position
+  // WRGB2 color channel indices
+  constexpr uint8_t WRGB_R      = 0x00;
+  constexpr uint8_t WRGB_G      = 0x01;
+  constexpr uint8_t WRGB_B      = 0x02;
+}
+
 namespace detail {
-// Berekent XOR-CRC over het frame en verpakt alles als [header] + frame + [crc]
 inline std::vector<uint8_t> wrap(uint8_t header, const std::vector<uint8_t>& frame) {
     uint8_t crc = 0;
     for (auto b : frame) crc ^= b;
@@ -30,25 +61,45 @@ inline std::vector<uint8_t> wrap(uint8_t header, const std::vector<uint8_t>& fra
 }
 } // namespace detail
 
-// Bouwt een volledig BLE pakket voor het opgegeven commando.
-// Gebruik: chihiros::pakket(0x5a, 0x04, {0x01}, seq)  →  auth-pakket
 inline std::vector<uint8_t> pakket(uint8_t header, uint8_t cmd,
-                                    std::initializer_list<uint8_t> data, uint8_t seq) {
-    uint8_t len = 5 + data.size(); // 5 vaste bytes: 01 + len + 00 + seq + cmd
+                                    std::initializer_list<uint8_t> d, uint8_t seq) {
+    uint8_t len = 5 + d.size();
     std::vector<uint8_t> frame = {0x01, len, 0x00, seq, cmd};
-    frame.insert(frame.end(), data.begin(), data.end());
+    frame.insert(frame.end(), d.begin(), d.end());
     return detail::wrap(header, frame);
 }
 
-// Stuurt een aan/uit-commando voor één roerder-kanaal (cmd=0x14).
-// De andere kanaal-posities krijgen 0xff = "niet aanraken".
-// kanaal 0..3 → data-positie [2+kanaal] in het frame.
-inline std::vector<uint8_t> roerder_toggle(uint8_t seq, int kanaal, bool aan) {
-    std::vector<uint8_t> data(10, 0xff); // 10 bytes, allemaal 0xff
-    data[2 + kanaal] = aan ? 0x01 : 0x00;
-    std::vector<uint8_t> frame = {0x01, 0x0f, 0x00, seq, 0x14};
-    frame.insert(frame.end(), data.begin(), data.end());
-    return detail::wrap(0xa5, frame);
+inline std::vector<uint8_t> pakket(uint8_t header, uint8_t cmd,
+                                    const std::vector<uint8_t>& d, uint8_t seq) {
+    uint8_t len = 5 + (uint8_t)d.size();
+    std::vector<uint8_t> frame = {0x01, len, 0x00, seq, cmd};
+    frame.insert(frame.end(), d.begin(), d.end());
+    return detail::wrap(header, frame);
+}
+
+// Returns current counter value and advances to next safe value, skipping 0x5a (frame header).
+// Required for WRGB2; other devices rarely reach seq=90 in a session but safe to use everywhere.
+inline uint8_t next_seq(uint8_t& counter) {
+    uint8_t v = counter++;
+    if (counter == 90) counter = 91;
+    return v;
+}
+
+// Builds an RTC sync packet from an ESPTime value.
+inline std::vector<uint8_t> rtc_pakket(ESPTime t, uint8_t seq) {
+    return pakket(hdr::BASE, cmd::RTC, {
+        (uint8_t)(t.year - 2000), (uint8_t)t.month,
+        (uint8_t)((t.day_of_week + 5) % 7 + 1),
+        (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second
+    }, seq);
+}
+
+// Sends an on/off command for one stirrer channel (STIR_TOGGLE).
+// Other channel positions are set to SKIP = "don't touch".
+inline std::vector<uint8_t> roerder_toggle(uint8_t seq, int channel, bool on) {
+    std::vector<uint8_t> d(10, data::SKIP);
+    d[2 + channel] = on ? 0x01 : 0x00;
+    return pakket(hdr::DEVICE, cmd::STIR_TOGGLE, d, seq);
 }
 
 } // namespace chihiros

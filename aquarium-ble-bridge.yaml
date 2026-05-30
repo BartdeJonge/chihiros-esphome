@@ -14,6 +14,8 @@ substitutions:
   roerder_mac: "EC:DE:A6:A0:61:1D"
   ventilator_mac: "D7:65:2F:EF:CC:BB"
   doctor_mac: "CC:A0:E9:07:34:C6"
+  wrgb2_mac:  "00:00:00:00:00:00"   # TODO: invullen na MAC-scan
+  dosing_mac: "00:00:00:00:00:00"   # TODO: invullen na MAC-scan
   # Nordic UART Service UUIDs (gedeeld door alle Chihiros devices)
   ble_service: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
   ble_tx: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
@@ -66,7 +68,9 @@ esp32_ble_tracker:
         - lambda: ESP_LOGI("co2", "CO2 controller gevonden! RSSI=%d", x.get_rssi());
 
 packages:
-  # co2:      !include aquarium-ble-bridge-co2.yaml  # tijdelijk uitgeschakeld
+  # co2:      !include aquarium-ble-bridge-co2.yaml      # tijdelijk uitgeschakeld
   roerder:    !include aquarium-ble-bridge-roerder.yaml
   ventilator: !include aquarium-ble-bridge-ventilator.yaml
   doctor:     !include aquarium-ble-bridge-doctor.yaml
+  # wrgb2:    !include aquarium-ble-bridge-wrgb2.yaml    # wacht op MAC-adres
+  # dosing:   !include aquarium-ble-bridge-dosing.yaml  # wacht op MAC + protocol sniffing
