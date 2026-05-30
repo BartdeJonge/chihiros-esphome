@@ -1,0 +1,291 @@
+# --- CO2 CONTROLLER ---
+# Protocol: auth → RTC → Reset Auto Settings
+# Schema: cmd=0x16 [uur, min, 0x64/0x00/0x6f]
+# Reset Auto Settings (0x05 [07 ff ff]) evalueert schema op huidig tijdstip
+
+globals:
+  - id: cmd_seq_co2
+    type: uint8_t
+    restore_value: false
+    initial_value: '1'
+
+ble_client:
+  - mac_address: ${co2_mac}
+    id: chihiros_co2
+    on_connect:
+      then:
+        - delay: 500ms
+        - ble_client.ble_write:
+            id: chihiros_co2
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              uint8_t seq = id(cmd_seq_co2)++;
+              std::vector<uint8_t> frame = {0x01, 0x06, 0x00, seq, 0x04, 0x01};
+              uint8_t crc = 0; for (auto b : frame) crc ^= b;
+              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+              ESP_LOGI("co2", "Auth"); return p;
+        - delay: 200ms
+        - ble_client.ble_write:
+            id: chihiros_co2
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              auto t = id(ha_time).now();
+              uint8_t seq = id(cmd_seq_co2)++;
+              std::vector<uint8_t> frame = {0x01, 0x0b, 0x00, seq, 0x09,
+                (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
+                (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second};
+              uint8_t crc = 0; for (auto b : frame) crc ^= b;
+              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+              ESP_LOGI("co2", "RTC %04d-%02d-%02d %02d:%02d:%02d", t.year, t.month, t.day_of_month, t.hour, t.minute, t.second);
+              return p;
+        - delay: 200ms
+        - ble_client.ble_write:
+            id: chihiros_co2
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              uint8_t seq = id(cmd_seq_co2)++;
+              std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x05, 0x07, 0xFF, 0xFF};
+              uint8_t crc = 0; for (auto b : frame) crc ^= b;
+              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+              ESP_LOGI("co2", "Reset Auto Settings"); return p;
+        - delay: 200ms
+        # Schema sturen op connect: AAN als we binnen het schema zitten, anders leeg (klep dicht)
+        - ble_client.ble_write:
+            id: chihiros_co2
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              auto t = id(ha_time).now();
+              uint8_t seq = id(cmd_seq_co2)++;
+              uint8_t h = (uint8_t)id(co2_start_uur).state;
+              uint8_t m = (uint8_t)id(co2_start_min).state;
+              int nu = t.hour * 60 + t.minute;
+              int start = (int)id(co2_start_uur).state * 60 + (int)id(co2_start_min).state;
+              int eind  = (int)id(co2_eind_uur).state  * 60 + (int)id(co2_eind_min).state;
+              bool actief = (start <= eind) ? (nu >= start && nu < eind) : (nu >= start || nu < eind);
+              uint8_t waarde = actief ? 0x64 : 0x6f;
+              std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, waarde};
+              uint8_t crc = 0; for (auto b : frame) crc ^= b;
+              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+              ESP_LOGI("co2", "Connect: start slot %02d:%02d -> %s", h, m, actief ? "AAN" : "LEEG");
+              return p;
+        - delay: 100ms
+        - ble_client.ble_write:
+            id: chihiros_co2
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              auto t = id(ha_time).now();
+              uint8_t seq = id(cmd_seq_co2)++;
+              uint8_t h = (uint8_t)id(co2_eind_uur).state;
+              uint8_t m = (uint8_t)id(co2_eind_min).state;
+              int nu = t.hour * 60 + t.minute;
+              int start = (int)id(co2_start_uur).state * 60 + (int)id(co2_start_min).state;
+              int eind  = (int)id(co2_eind_uur).state  * 60 + (int)id(co2_eind_min).state;
+              bool actief = (start <= eind) ? (nu >= start && nu < eind) : (nu >= start || nu < eind);
+              uint8_t waarde = actief ? 0x00 : 0x6f;
+              std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, waarde};
+              uint8_t crc = 0; for (auto b : frame) crc ^= b;
+              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+              ESP_LOGI("co2", "Connect: eind slot %02d:%02d -> %s", h, m, actief ? "UIT" : "LEEG");
+              return p;
+        - delay: 100ms
+        - ble_client.ble_write:
+            id: chihiros_co2
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              uint8_t seq = id(cmd_seq_co2)++;
+              std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x05, 0x07, 0xFF, 0xFF};
+              uint8_t crc = 0; for (auto b : frame) crc ^= b;
+              std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+              ESP_LOGI("co2", "Reset Auto Settings (schema activeren)"); return p;
+        - logger.log: "CO2 verbonden"
+    on_disconnect:
+      then:
+        - logger.log: "CO2 verbinding verbroken"
+
+script:
+  - id: stuur_schema
+    then:
+      # Stap 1: huidige slots leegmaken
+      - ble_client.ble_write:
+          id: chihiros_co2
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t seq = id(cmd_seq_co2)++;
+            uint8_t h = (uint8_t)id(co2_start_uur).state;
+            uint8_t m = (uint8_t)id(co2_start_min).state;
+            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, 0x6f};
+            uint8_t crc = 0; for (auto b : frame) crc ^= b;
+            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+            ESP_LOGI("co2", "Schema leeg start=%02d:%02d", h, m); return p;
+      - delay: 100ms
+      - ble_client.ble_write:
+          id: chihiros_co2
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t seq = id(cmd_seq_co2)++;
+            uint8_t h = (uint8_t)id(co2_eind_uur).state;
+            uint8_t m = (uint8_t)id(co2_eind_min).state;
+            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, 0x6f};
+            uint8_t crc = 0; for (auto b : frame) crc ^= b;
+            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+            ESP_LOGI("co2", "Schema leeg eind=%02d:%02d", h, m); return p;
+      - delay: 100ms
+      # Stap 2: Switch to Auto Mode — device evalueert leeg schema → klep dicht
+      - ble_client.ble_write:
+          id: chihiros_co2
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t seq = id(cmd_seq_co2)++;
+            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x05, 0x12, 0xFF, 0xFF};
+            uint8_t crc = 0; for (auto b : frame) crc ^= b;
+            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+            ESP_LOGI("co2", "Switch to Auto Mode (leeg)"); return p;
+      - delay: 300ms
+      # Stap 3: nieuw schema instellen
+      - ble_client.ble_write:
+          id: chihiros_co2
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t seq = id(cmd_seq_co2)++;
+            uint8_t h = (uint8_t)id(co2_start_uur).state;
+            uint8_t m = (uint8_t)id(co2_start_min).state;
+            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, 0x64};
+            uint8_t crc = 0; for (auto b : frame) crc ^= b;
+            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+            ESP_LOGI("co2", "Schema start=%02d:%02d", h, m); return p;
+      - delay: 100ms
+      - ble_client.ble_write:
+          id: chihiros_co2
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t seq = id(cmd_seq_co2)++;
+            uint8_t h = (uint8_t)id(co2_eind_uur).state;
+            uint8_t m = (uint8_t)id(co2_eind_min).state;
+            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, m, 0x00};
+            uint8_t crc = 0; for (auto b : frame) crc ^= b;
+            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+            ESP_LOGI("co2", "Schema eind=%02d:%02d", h, m); return p;
+      - delay: 100ms
+      # Stap 4: Reset Auto Settings — evalueert schema op huidig tijdstip
+      - ble_client.ble_write:
+          id: chihiros_co2
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t seq = id(cmd_seq_co2)++;
+            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x05, 0x07, 0xFF, 0xFF};
+            uint8_t crc = 0; for (auto b : frame) crc ^= b;
+            std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+            ESP_LOGI("co2", "Reset Auto Settings (schema activeren)"); return p;
+
+switch:
+  - platform: ble_client
+    ble_client_id: chihiros_co2
+    id: co2_connect
+    internal: true
+    restore_mode: ALWAYS_ON
+
+button:
+  - platform: template
+    name: "CO2 schema versturen"
+    id: btn_co2_schema
+    icon: mdi:molecule-co2
+    on_press:
+      - if:
+          condition:
+            switch.is_on: co2_connect
+          then:
+            - script.execute: stuur_schema
+
+  - platform: template
+    name: "RTC sync"
+    id: btn_rtc_sync
+    icon: mdi:clock-sync
+    on_press:
+      - if:
+          condition:
+            switch.is_on: co2_connect
+          then:
+            - ble_client.ble_write:
+                id: chihiros_co2
+                service_uuid: ${ble_service}
+                characteristic_uuid: ${ble_tx}
+                value: !lambda |-
+                  auto t = id(ha_time).now();
+                  uint8_t seq = id(cmd_seq_co2)++;
+                  std::vector<uint8_t> frame = {0x01, 0x0b, 0x00, seq, 0x09,
+                    (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
+                    (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second};
+                  uint8_t crc = 0; for (auto b : frame) crc ^= b;
+                  std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+                  ESP_LOGI("co2", "RTC sync"); return p;
+      - if:
+          condition:
+            switch.is_on: roerder_verbinding
+          then:
+            - ble_client.ble_write:
+                id: chihiros_roerder
+                service_uuid: ${ble_service}
+                characteristic_uuid: ${ble_tx}
+                value: !lambda |-
+                  auto t = id(ha_time).now();
+                  uint8_t seq = id(cmd_seq_roerder)++;
+                  std::vector<uint8_t> frame = {0x01, 0x0b, 0x00, seq, 0x09,
+                    (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
+                    (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second};
+                  uint8_t crc = 0; for (auto b : frame) crc ^= b;
+                  std::vector<uint8_t> p = {0x5a}; p.insert(p.end(), frame.begin(), frame.end()); p.push_back(crc);
+                  ESP_LOGI("roerder", "RTC sync"); return p;
+
+sensor:
+  - platform: homeassistant
+    id: co2_start_uur
+    entity_id: input_datetime.aquarium_co2_start
+    attribute: hour
+  - platform: homeassistant
+    id: co2_start_min
+    entity_id: input_datetime.aquarium_co2_start
+    attribute: minute
+  - platform: homeassistant
+    id: co2_eind_uur
+    entity_id: input_datetime.aquarium_co2_eind
+    attribute: hour
+  - platform: homeassistant
+    id: co2_eind_min
+    entity_id: input_datetime.aquarium_co2_eind
+    attribute: minute
+
+  - platform: ble_client
+    type: rssi
+    ble_client_id: chihiros_co2
+    name: "CO2 RSSI"
+    update_interval: 30s
+
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: chihiros_co2
+    service_uuid: ${ble_service}
+    characteristic_uuid: ${ble_rx}
+    id: co2_status_raw
+    name: "CO2 Status"
+    notify: true
+    unit_of_measurement: ""
+    lambda: |-
+      ESP_LOGI("co2", "Notificatie: %s", [&](){
+        std::string s;
+        for (auto b : x) { char buf[4]; snprintf(buf, sizeof(buf), "%02x ", b); s += buf; }
+        return s;
+      }().c_str());
+      if (x.size() >= 7) return (float)x[6];
+      return NAN;

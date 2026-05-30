@@ -1,0 +1,186 @@
+# --- DOCTOR MATE ---
+#
+# De Chihiros Doctor Mate meet waterkwaliteit (EC/TDS) en doseert automatisch.
+#
+# Verbindingsvolgorde bij elke BLE-connect:
+#   1. Auth        — standaard Chihiros handshake (0xa5)
+#   2. RTC sync    — klok synchroniseren (0x5a)
+#   3. TDS target  — doelwaarde EC in µS/cm, cmd=0x01 data=[0x00, ec] (positie 1)
+#   4. Volume      — tankinhoud in liters × 2, cmd=0x01 data=[0x00, vol] (positie 2)
+#
+# BELANGRIJK: TDS en Volume hebben exact hetzelfde frameformaat (cmd=0x01, data[0]=0x00).
+# Het apparaat onderscheidt ze UITSLUITEND op volgorde: 1e = TDS, 2e = Volume.
+# Altijd beide sturen bij elke settings-update, altijd in deze volgorde.
+#
+# EC encoding: µS/cm = ppm / 0.4  (100 ppm = 250 µS/cm = 0xfa, max ~102 ppm)
+# Volume encoding: liters × 2     (50 L = 0x64, 100 L = 0xc8, max ~127 L)
+#
+# Profielen (TDS presets):
+#   Plant:   80 ppm → EC 200 µS/cm → 0xc8
+#   Vis:     93 ppm → EC 233 µS/cm → 0xe9
+#   Garnaal: 66 ppm → EC 166 µS/cm → 0xa6
+#
+# Notificaties van het apparaat (na auth):
+#   byte[5] = EC meting (µS/cm) — vermoedelijk, bevestig via logs
+
+globals:
+  - id: cmd_seq_doctor
+    type: uint8_t
+    restore_value: false
+    initial_value: '1'
+
+ble_client:
+  - mac_address: ${doctor_mac}
+    id: chihiros_doctor
+    on_connect:
+      then:
+        - delay: 500ms
+        # Stap 1: auth (0xa5 — Doctor gebruikt 0xa5 voor auth, niet 0x5a)
+        - ble_client.ble_write:
+            id: chihiros_doctor
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              ESP_LOGI("doctor", "Auth");
+              return chihiros::pakket(0xa5, 0x04, {0x01}, id(cmd_seq_doctor)++);
+        - delay: 200ms
+        # Stap 2: RTC sync
+        - ble_client.ble_write:
+            id: chihiros_doctor
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              auto t = id(ha_time).now();
+              ESP_LOGI("doctor", "RTC");
+              return chihiros::pakket(0x5a, 0x09, {
+                (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
+                (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second
+              }, id(cmd_seq_doctor)++);
+        - delay: 200ms
+        # Stap 3+4: TDS (positie 1) en Volume (positie 2) — altijd via script, volgorde essentieel
+        - script.execute: stuur_doctor_instellingen
+    on_disconnect:
+      then:
+        - logger.log: "Doctor Mate verbinding verbroken"
+
+script:
+  # Stuurt TDS target (positie 1) gevolgd door Volume (positie 2).
+  # Volgorde is essentieel — apparaat onderscheidt de twee writes alleen op volgorde.
+  - id: stuur_doctor_instellingen
+    then:
+      - ble_client.ble_write:
+          id: chihiros_doctor
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t ec = (uint8_t)roundf(id(num_doctor_tds).state / 0.4f);
+            ESP_LOGI("doctor", "TDS %d ppm → EC %d µS/cm (0x%02x)", (int)id(num_doctor_tds).state, ec, ec);
+            return chihiros::pakket(0xa5, 0x01, {0x00, ec}, id(cmd_seq_doctor)++);
+      - delay: 200ms
+      - ble_client.ble_write:
+          id: chihiros_doctor
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t vol = (uint8_t)(id(num_doctor_volume).state * 2.0f);
+            ESP_LOGI("doctor", "Volume %d L → %d (0x%02x)", (int)id(num_doctor_volume).state, vol, vol);
+            return chihiros::pakket(0xa5, 0x01, {0x00, vol}, id(cmd_seq_doctor)++);
+      - logger.log: "Doctor Mate instellingen gestuurd"
+
+switch:
+  - platform: ble_client
+    ble_client_id: chihiros_doctor
+    id: doctor_verbinding
+    internal: true
+    restore_mode: ALWAYS_ON
+
+number:
+  # TDS doelwaarde in ppm — apparaat werkt met EC µS/cm = ppm / 0.4
+  # Maximaal ~102 ppm (EC 255 µS/cm past in één byte)
+  - platform: template
+    name: "Doctor Mate TDS"
+    id: num_doctor_tds
+    min_value: 10
+    max_value: 100
+    step: 1
+    initial_value: 80
+    restore_value: true
+    icon: mdi:water-check
+    unit_of_measurement: "ppm"
+    optimistic: true
+    on_value:
+      then:
+        - script.execute: stuur_doctor_instellingen
+
+  # Tankvolume — apparaat ontvangt liters × 2, max ~127 L (255/2)
+  - platform: template
+    name: "Doctor Mate volume"
+    id: num_doctor_volume
+    min_value: 10
+    max_value: 127
+    step: 1
+    initial_value: 100
+    restore_value: true
+    icon: mdi:water
+    unit_of_measurement: "L"
+    optimistic: true
+    on_value:
+      then:
+        - script.execute: stuur_doctor_instellingen
+
+select:
+  # Snel profiel wisselen — past TDS aan naar de preset van het gekozen profiel.
+  # Selecteren triggert num_doctor_tds.on_value → stuur_doctor_instellingen.
+  - platform: template
+    name: "Doctor Mate profiel"
+    id: sel_doctor_profiel
+    icon: mdi:fish
+    restore_value: true
+    optimistic: true
+    options:
+      - "Plant (80 ppm)"
+      - "Vis (93 ppm)"
+      - "Garnaal (66 ppm)"
+      - "Manueel"
+    initial_option: "Plant (80 ppm)"
+    on_value:
+      then:
+        - lambda: |-
+            if (x == "Plant (80 ppm)")       id(num_doctor_tds).make_call().set_value(80).perform();
+            else if (x == "Vis (93 ppm)")    id(num_doctor_tds).make_call().set_value(93).perform();
+            else if (x == "Garnaal (66 ppm)") id(num_doctor_tds).make_call().set_value(66).perform();
+
+sensor:
+  - platform: ble_client
+    type: rssi
+    ble_client_id: chihiros_doctor
+    name: "Doctor Mate RSSI"
+    update_interval: 60s
+
+  # Ruwe notificaties van het apparaat — byte[5] is vermoedelijk EC meting (µS/cm)
+  # Controleer de logs na eerste connect om het formaat te bevestigen
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: chihiros_doctor
+    service_uuid: ${ble_service}
+    characteristic_uuid: ${ble_rx}
+    id: doctor_notificatie
+    name: "Doctor Mate Notificatie"
+    notify: true
+    internal: true
+    unit_of_measurement: ""
+    lambda: |-
+      ESP_LOGI("doctor", "Notificatie (%d bytes):", x.size());
+      for (int i = 0; i < (int)x.size(); i++) ESP_LOGI("doctor", "  [%d] = 0x%02x (%d)", i, x[i], x[i]);
+      if (x.size() >= 6 && x[5] > 0 && x[5] != 0xff) {
+        id(sensor_doctor_ec).publish_state((float)x[5]);
+      }
+      return NAN;
+
+  - platform: template
+    id: sensor_doctor_ec
+    name: "Doctor Mate EC"
+    unit_of_measurement: "µS/cm"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: mdi:water-percent

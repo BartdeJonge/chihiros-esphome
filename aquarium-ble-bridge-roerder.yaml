@@ -1,0 +1,333 @@
+# --- MAGNETISCH ROERDER ---
+#
+# De Chihiros magnetische roerder heeft 4 onafhankelijke kanalen (0-3).
+# Elk kanaal heeft een snelheid (0-100%), een aan-tijd (minuten) en een interval (minuten).
+#
+# Verbindingsvolgorde bij elke BLE-connect:
+#   1. Auth       — meldt ons aan bij het apparaat
+#   2. RTC sync   — synchroniseert de interne klok van de roerder
+#   3. Config     — stuurt snelheid + timer per kanaal, gevolgd door "apply"
+#   4. Staat      — herstelt welke kanalen aan/uit moeten staan
+#
+# Waarom globals voor aan/uit staat?
+#   De ESP32 crasht regelmatig door BLE-stack druk (meerdere clients + scanner).
+#   Na een crash en herstart stuurt ESPHome de huidige switch-staat naar HA.
+#   Met restore_value:true worden de globals uit flash hersteld, zodat de
+#   lambda: return id(roerder_kX_aan) de juiste staat teruggeeft aan HA —
+#   ook als de ESP32 net herstart is.
+#
+# Instellingen komen uit: input_number.aquarium_roerder_kanaal_X_{snelheid|duur|interval}
+
+globals:
+  - id: cmd_seq_roerder
+    type: uint8_t
+    restore_value: false  # sequentieteller hoeft niet te overleven na crash
+    initial_value: '1'
+
+  # Persistente aan/uit staat per kanaal — overleeft een crash via NVS-flash
+  - id: roerder_k0_aan
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  - id: roerder_k1_aan
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  - id: roerder_k2_aan
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  - id: roerder_k3_aan
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+
+ble_client:
+  - mac_address: ${roerder_mac}
+    id: chihiros_roerder
+    on_connect:
+      then:
+        # Korte wachttijd zodat de BLE-verbinding stabiel is voor we schrijven
+        - delay: 500ms
+        # Stap 1: auth — verplicht voor elk Chihiros device
+        - ble_client.ble_write:
+            id: chihiros_roerder
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              ESP_LOGI("roerder", "Auth");
+              return chihiros::pakket(0x5a, 0x04, {0x01}, id(cmd_seq_roerder)++);
+        - delay: 200ms
+        # Stap 2: RTC sync — roerder gebruikt de klok voor zijn timer-schema
+        - ble_client.ble_write:
+            id: chihiros_roerder
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              auto t = id(ha_time).now();
+              ESP_LOGI("roerder", "RTC %04d-%02d-%02d %02d:%02d:%02d", t.year, t.month, t.day_of_month, t.hour, t.minute, t.second);
+              return chihiros::pakket(0x5a, 0x09, {
+                (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)((t.day_of_week + 5) % 7 + 1),
+                (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second
+              }, id(cmd_seq_roerder)++);
+        - delay: 200ms
+        # Stap 3+4: config + staat-herstel via script (zie hieronder)
+        - script.execute: stuur_roerder_config
+    on_disconnect:
+      then:
+        - logger.log: "Roerder verbinding verbroken"
+
+script:
+  # Stuurt de drie config-writes voor één kanaal: enable, snelheid, timer.
+  # Wordt 4× aangeroepen (kanaal 0 t/m 3) vanuit stuur_roerder_config.
+  # De 100ms delays zijn nodig omdat het apparaat tijd nodig heeft om
+  # elk commando te verwerken voor het volgende arriveert.
+  - id: stuur_kanaal_config
+    parameters:
+      kanaal: int
+    then:
+      # Enable: vertelt het apparaat dat dit kanaal bestaat
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            return chihiros::pakket(0xa5, 0x20, {(uint8_t)kanaal, 0x00, 0x01}, id(cmd_seq_roerder)++);
+      - delay: 100ms
+      # Snelheid: 0-100% uit HA → omrekenen naar 0-127 (apparaat-schaal)
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            float snelheden[] = {id(roerder_k0_snelheid).state, id(roerder_k1_snelheid).state,
+                                 id(roerder_k2_snelheid).state, id(roerder_k3_snelheid).state};
+            uint8_t spd = (uint8_t)(snelheden[kanaal] * 127.0 / 100.0);
+            ESP_LOGI("roerder", "K%d snelheid=%d", kanaal, spd);
+            return chihiros::pakket(0xa5, 0x1b, {(uint8_t)kanaal, spd, 0x01, 0x00, 0x00, 0x00}, id(cmd_seq_roerder)++);
+      - delay: 100ms
+      # Timer: aan-duur en herhalingsinterval in minuten
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t duren[]       = {(uint8_t)id(roerder_k0_duur).state,     (uint8_t)id(roerder_k1_duur).state,
+                                     (uint8_t)id(roerder_k2_duur).state,     (uint8_t)id(roerder_k3_duur).state};
+            uint8_t intervallen[] = {(uint8_t)id(roerder_k0_interval).state, (uint8_t)id(roerder_k1_interval).state,
+                                     (uint8_t)id(roerder_k2_interval).state, (uint8_t)id(roerder_k3_interval).state};
+            ESP_LOGI("roerder", "K%d duur=%d interval=%d", kanaal, duren[kanaal], intervallen[kanaal]);
+            return chihiros::pakket(0xa5, 0x15, {(uint8_t)kanaal, 0x00, duren[kanaal], intervallen[kanaal], 0x00, 0x00}, id(cmd_seq_roerder)++);
+      - delay: 100ms
+
+  # Herstelt de aan/uit staat van alle 4 kanalen in één BLE write.
+  # Wordt aangeroepen na stuur_roerder_config (bij connect én via de knop).
+  # Alle 4 kanalen in één frame: 0xff op een kanaal-positie = "niet aanraken".
+  - id: herstel_roerder_staat
+    then:
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t k0 = id(roerder_k0_aan) ? 0x01 : 0x00;
+            uint8_t k1 = id(roerder_k1_aan) ? 0x01 : 0x00;
+            uint8_t k2 = id(roerder_k2_aan) ? 0x01 : 0x00;
+            uint8_t k3 = id(roerder_k3_aan) ? 0x01 : 0x00;
+            ESP_LOGI("roerder", "Herstel K0=%d K1=%d K2=%d K3=%d", k0, k1, k2, k3);
+            return chihiros::pakket(0xa5, 0x14, {0xff, 0xff, k0, k1, k2, k3, 0xff, 0xff, 0xff, 0xff}, id(cmd_seq_roerder)++);
+
+  # Volledige initialisatie: config voor alle 4 kanalen → apply → staat-herstel.
+  # script.wait zorgt dat elk kanaal klaar is voor het volgende begint.
+  - id: stuur_roerder_config
+    then:
+      - script.execute:
+          id: stuur_kanaal_config
+          kanaal: 0
+      - script.wait: stuur_kanaal_config
+      - script.execute:
+          id: stuur_kanaal_config
+          kanaal: 1
+      - script.wait: stuur_kanaal_config
+      - script.execute:
+          id: stuur_kanaal_config
+          kanaal: 2
+      - script.wait: stuur_kanaal_config
+      - script.execute:
+          id: stuur_kanaal_config
+          kanaal: 3
+      - script.wait: stuur_kanaal_config
+      # Apply: slaat de geconfigureerde instellingen op in het apparaat
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "Config toegepast");
+            return chihiros::pakket(0xa5, 0x1f, {0x00}, id(cmd_seq_roerder)++);
+      - delay: 100ms
+      - script.execute: herstel_roerder_staat
+      - script.wait: herstel_roerder_staat
+
+switch:
+  # Interne verbindingsschakelaar — houdt de BLE-link altijd actief
+  - platform: ble_client
+    ble_client_id: chihiros_roerder
+    id: roerder_verbinding
+    internal: true
+    restore_mode: ALWAYS_ON
+
+  # Kanaal-schakelaars: lambda leest de global (crash-bestendig), BLE write
+  # stuurt het commando direct (geen script-parameter, want die werkt niet
+  # betrouwbaar vanuit turn_on/turn_off_action in ESPHome YAML).
+  - platform: template
+    name: "Roerder kanaal 0"
+    id: roerder_sw_k0
+    icon: mdi:rotate-3d-variant
+    lambda: return id(roerder_k0_aan);
+    turn_on_action:
+      - lambda: id(roerder_k0_aan) = true;  # sla op in NVS vóór de BLE write
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "K0 AAN");
+            return chihiros::roerder_toggle(id(cmd_seq_roerder)++, 0, true);
+    turn_off_action:
+      - lambda: id(roerder_k0_aan) = false;
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "K0 UIT");
+            return chihiros::roerder_toggle(id(cmd_seq_roerder)++, 0, false);
+
+  - platform: template
+    name: "Roerder kanaal 1"
+    id: roerder_sw_k1
+    icon: mdi:rotate-3d-variant
+    lambda: return id(roerder_k1_aan);
+    turn_on_action:
+      - lambda: id(roerder_k1_aan) = true;
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "K1 AAN");
+            return chihiros::roerder_toggle(id(cmd_seq_roerder)++, 1, true);
+    turn_off_action:
+      - lambda: id(roerder_k1_aan) = false;
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "K1 UIT");
+            return chihiros::roerder_toggle(id(cmd_seq_roerder)++, 1, false);
+
+  - platform: template
+    name: "Roerder kanaal 2"
+    id: roerder_sw_k2
+    icon: mdi:rotate-3d-variant
+    lambda: return id(roerder_k2_aan);
+    turn_on_action:
+      - lambda: id(roerder_k2_aan) = true;
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "K2 AAN");
+            return chihiros::roerder_toggle(id(cmd_seq_roerder)++, 2, true);
+    turn_off_action:
+      - lambda: id(roerder_k2_aan) = false;
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "K2 UIT");
+            return chihiros::roerder_toggle(id(cmd_seq_roerder)++, 2, false);
+
+  - platform: template
+    name: "Roerder kanaal 3"
+    id: roerder_sw_k3
+    icon: mdi:rotate-3d-variant
+    lambda: return id(roerder_k3_aan);
+    turn_on_action:
+      - lambda: id(roerder_k3_aan) = true;
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "K3 AAN");
+            return chihiros::roerder_toggle(id(cmd_seq_roerder)++, 3, true);
+    turn_off_action:
+      - lambda: id(roerder_k3_aan) = false;
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            ESP_LOGI("roerder", "K3 UIT");
+            return chihiros::roerder_toggle(id(cmd_seq_roerder)++, 3, false);
+
+button:
+  - platform: template
+    name: "Roerder config toepassen"
+    id: btn_roerder_config
+    icon: mdi:content-save-cog
+    on_press:
+      - script.execute: stuur_roerder_config
+
+sensor:
+  # HA-sensors: ESPHome leest deze waarden uit HA en gebruikt ze in de BLE writes
+  - platform: homeassistant
+    id: roerder_k0_snelheid
+    entity_id: input_number.aquarium_roerder_kanaal_0_snelheid
+  - platform: homeassistant
+    id: roerder_k0_duur
+    entity_id: input_number.aquarium_roerder_kanaal_0_duur
+  - platform: homeassistant
+    id: roerder_k0_interval
+    entity_id: input_number.aquarium_roerder_kanaal_0_interval
+
+  - platform: homeassistant
+    id: roerder_k1_snelheid
+    entity_id: input_number.aquarium_roerder_kanaal_1_snelheid
+  - platform: homeassistant
+    id: roerder_k1_duur
+    entity_id: input_number.aquarium_roerder_kanaal_1_duur
+  - platform: homeassistant
+    id: roerder_k1_interval
+    entity_id: input_number.aquarium_roerder_kanaal_1_interval
+
+  - platform: homeassistant
+    id: roerder_k2_snelheid
+    entity_id: input_number.aquarium_roerder_kanaal_2_snelheid
+  - platform: homeassistant
+    id: roerder_k2_duur
+    entity_id: input_number.aquarium_roerder_kanaal_2_duur
+  - platform: homeassistant
+    id: roerder_k2_interval
+    entity_id: input_number.aquarium_roerder_kanaal_2_interval
+
+  - platform: homeassistant
+    id: roerder_k3_snelheid
+    entity_id: input_number.aquarium_roerder_kanaal_3_snelheid
+  - platform: homeassistant
+    id: roerder_k3_duur
+    entity_id: input_number.aquarium_roerder_kanaal_3_duur
+  - platform: homeassistant
+    id: roerder_k3_interval
+    entity_id: input_number.aquarium_roerder_kanaal_3_interval
+
+  - platform: ble_client
+    type: rssi
+    ble_client_id: chihiros_roerder
+    name: "Roerder RSSI"
+    update_interval: 60s

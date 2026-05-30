@@ -1,0 +1,72 @@
+# --- SAMENVATTING ---
+# Chihiros BLE bridge — CO2 controller + magnetisch roerder + koelventilator + Doctor Mate
+# Configuratie gesplitst in packages per device:
+#   aquarium-ble-bridge-co2.yaml
+#   aquarium-ble-bridge-roerder.yaml
+#   aquarium-ble-bridge-ventilator.yaml
+#   aquarium-ble-bridge-doctor.yaml
+
+substitutions:
+  name: aquarium-ble-bridge
+  friendly_name: aquarium-ble-bridge
+  # MAC-adressen
+  co2_mac: "CC:A0:27:8E:79:E9"
+  roerder_mac: "EC:DE:A6:A0:61:1D"
+  ventilator_mac: "D7:65:2F:EF:CC:BB"
+  doctor_mac: "CC:A0:E9:07:34:C6"
+  # Nordic UART Service UUIDs (gedeeld door alle Chihiros devices)
+  ble_service: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+  ble_tx: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+  ble_rx: "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  includes:
+    - chihiros_ble.h
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: "Europe/Amsterdam"
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+    interval: 320ms
+    window: 30ms
+    continuous: true
+  on_ble_advertise:
+    - mac_address: ${co2_mac}
+      then:
+        - lambda: ESP_LOGI("co2", "CO2 controller gevonden! RSSI=%d", x.get_rssi());
+
+packages:
+  # co2:      !include aquarium-ble-bridge-co2.yaml  # tijdelijk uitgeschakeld
+  roerder:    !include aquarium-ble-bridge-roerder.yaml
+  ventilator: !include aquarium-ble-bridge-ventilator.yaml
+  doctor:     !include aquarium-ble-bridge-doctor.yaml
