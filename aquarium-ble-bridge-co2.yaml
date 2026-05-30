@@ -20,8 +20,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("co2", "Auth");
-              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::AUTH,
-                {chihiros::data::AUTH_BASE}, id(cmd_seq_co2)++);
+              return chihiros::auth(id(cmd_seq_co2)++);
         - delay: 200ms
         - ble_client.ble_write:
             id: chihiros_co2
@@ -38,8 +37,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("co2", "Reset Auto Settings");
-              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
-                {chihiros::data::RESET_SCHEMA, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_co2)++);
+              return chihiros::reset_schema(id(cmd_seq_co2)++);
         - delay: 200ms
         # Schema sturen op connect: AAN als we binnen het schema zitten, anders leeg (klep dicht)
         - ble_client.ble_write:
@@ -56,7 +54,7 @@ ble_client:
               bool actief = (start <= eind) ? (nu >= start && nu < eind) : (nu >= start || nu < eind);
               uint8_t waarde = actief ? chihiros::data::CO2_ON : chihiros::data::CO2_EMPTY;
               ESP_LOGI("co2", "Connect: start slot %02d:%02d -> %s", h, m, actief ? "AAN" : "LEEG");
-              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA, {h, m, waarde}, id(cmd_seq_co2)++);
+              return chihiros::co2_schema(h, m, waarde, id(cmd_seq_co2)++);
         - delay: 100ms
         - ble_client.ble_write:
             id: chihiros_co2
@@ -72,7 +70,7 @@ ble_client:
               bool actief = (start <= eind) ? (nu >= start && nu < eind) : (nu >= start || nu < eind);
               uint8_t waarde = actief ? chihiros::data::CO2_OFF : chihiros::data::CO2_EMPTY;
               ESP_LOGI("co2", "Connect: eind slot %02d:%02d -> %s", h, m, actief ? "UIT" : "LEEG");
-              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA, {h, m, waarde}, id(cmd_seq_co2)++);
+              return chihiros::co2_schema(h, m, waarde, id(cmd_seq_co2)++);
         - delay: 100ms
         - ble_client.ble_write:
             id: chihiros_co2
@@ -80,8 +78,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("co2", "Reset Auto Settings (schema activeren)");
-              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
-                {chihiros::data::RESET_SCHEMA, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_co2)++);
+              return chihiros::reset_schema(id(cmd_seq_co2)++);
         - logger.log: "CO2 verbonden"
     on_disconnect:
       then:
@@ -99,8 +96,7 @@ script:
             uint8_t h = (uint8_t)id(co2_start_uur).state;
             uint8_t m = (uint8_t)id(co2_start_min).state;
             ESP_LOGI("co2", "Schema leeg start=%02d:%02d", h, m);
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA,
-              {h, m, chihiros::data::CO2_EMPTY}, id(cmd_seq_co2)++);
+            return chihiros::co2_schema(h, m, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
       - delay: 100ms
       - ble_client.ble_write:
           id: chihiros_co2
@@ -110,8 +106,7 @@ script:
             uint8_t h = (uint8_t)id(co2_eind_uur).state;
             uint8_t m = (uint8_t)id(co2_eind_min).state;
             ESP_LOGI("co2", "Schema leeg eind=%02d:%02d", h, m);
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA,
-              {h, m, chihiros::data::CO2_EMPTY}, id(cmd_seq_co2)++);
+            return chihiros::co2_schema(h, m, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
       - delay: 100ms
       # Stap 2: Switch to Auto Mode — device evalueert leeg schema → klep dicht
       - ble_client.ble_write:
@@ -120,8 +115,7 @@ script:
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
             ESP_LOGI("co2", "Switch to Auto Mode (leeg)");
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
-              {chihiros::data::RESET_AUTO, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_co2)++);
+            return chihiros::reset_auto(id(cmd_seq_co2)++);
       - delay: 300ms
       # Stap 3: nieuw schema instellen
       - ble_client.ble_write:
@@ -132,8 +126,7 @@ script:
             uint8_t h = (uint8_t)id(co2_start_uur).state;
             uint8_t m = (uint8_t)id(co2_start_min).state;
             ESP_LOGI("co2", "Schema start=%02d:%02d", h, m);
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA,
-              {h, m, chihiros::data::CO2_ON}, id(cmd_seq_co2)++);
+            return chihiros::co2_schema(h, m, chihiros::data::CO2_ON, id(cmd_seq_co2)++);
       - delay: 100ms
       - ble_client.ble_write:
           id: chihiros_co2
@@ -143,8 +136,7 @@ script:
             uint8_t h = (uint8_t)id(co2_eind_uur).state;
             uint8_t m = (uint8_t)id(co2_eind_min).state;
             ESP_LOGI("co2", "Schema eind=%02d:%02d", h, m);
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::SCHEMA,
-              {h, m, chihiros::data::CO2_OFF}, id(cmd_seq_co2)++);
+            return chihiros::co2_schema(h, m, chihiros::data::CO2_OFF, id(cmd_seq_co2)++);
       - delay: 100ms
       # Stap 4: Reset Auto Settings — evalueert schema op huidig tijdstip
       - ble_client.ble_write:
@@ -153,8 +145,7 @@ script:
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
             ESP_LOGI("co2", "Reset Auto Settings (schema activeren)");
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
-              {chihiros::data::RESET_SCHEMA, chihiros::data::SKIP, chihiros::data::SKIP}, id(cmd_seq_co2)++);
+            return chihiros::reset_schema(id(cmd_seq_co2)++);
 
 switch:
   - platform: ble_client

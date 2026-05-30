@@ -70,8 +70,7 @@ script:
           value: !lambda |-
             ESP_LOGI("wrgb2", "Brightness R=%d G=%d B=%d",
               (int)id(num_wrgb2_r).state, (int)id(num_wrgb2_g).state, (int)id(num_wrgb2_b).state);
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::BRIGHTNESS,
-              {chihiros::data::WRGB_R, (uint8_t)id(num_wrgb2_r).state},
+            return chihiros::wrgb_channel(chihiros::data::WRGB_R, (uint8_t)id(num_wrgb2_r).state,
               chihiros::next_seq(id(cmd_seq_wrgb2)));
       - delay: 100ms
       - ble_client.ble_write:
@@ -79,8 +78,7 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::BRIGHTNESS,
-              {chihiros::data::WRGB_G, (uint8_t)id(num_wrgb2_g).state},
+            return chihiros::wrgb_channel(chihiros::data::WRGB_G, (uint8_t)id(num_wrgb2_g).state,
               chihiros::next_seq(id(cmd_seq_wrgb2)));
       - delay: 100ms
       - ble_client.ble_write:
@@ -88,8 +86,7 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::BRIGHTNESS,
-              {chihiros::data::WRGB_B, (uint8_t)id(num_wrgb2_b).state},
+            return chihiros::wrgb_channel(chihiros::data::WRGB_B, (uint8_t)id(num_wrgb2_b).state,
               chihiros::next_seq(id(cmd_seq_wrgb2)));
 
   # Stuurt het schema naar het apparaat:
@@ -106,9 +103,7 @@ script:
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
             ESP_LOGI("wrgb2", "Schema reset");
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
-              {chihiros::data::RESET_SCHEMA, chihiros::data::SKIP, chihiros::data::SKIP},
-              chihiros::next_seq(id(cmd_seq_wrgb2)));
+            return chihiros::reset_schema(chihiros::next_seq(id(cmd_seq_wrgb2)));
       - delay: 200ms
       # Stap 2: schema toevoegen (weekdays=127 = elke dag)
       - ble_client.ble_write:
@@ -127,10 +122,7 @@ script:
             uint8_t b = (uint8_t)id(wrgb2_schema_blauw).state;
             ESP_LOGI("wrgb2", "Schema %02d:%02d->%02d:%02d ramp=%d R=%d G=%d B=%d",
               aan_h, aan_m, uit_h, uit_m, ramp, r, g, b);
-            return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::SCHEDULE,
-              {aan_h, aan_m, uit_h, uit_m, ramp, 127, r, g, b,
-               chihiros::data::SKIP, chihiros::data::SKIP, chihiros::data::SKIP,
-               chihiros::data::SKIP, chihiros::data::SKIP},
+            return chihiros::wrgb_schedule(aan_h, aan_m, uit_h, uit_m, ramp, 127, r, g, b,
               chihiros::next_seq(id(cmd_seq_wrgb2)));
       - delay: 200ms
       # Stap 3: activeer auto modus
@@ -140,9 +132,7 @@ script:
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
             ESP_LOGI("wrgb2", "Auto modus activeren");
-            return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::MODE,
-              {chihiros::data::RESET_AUTO, chihiros::data::SKIP, chihiros::data::SKIP},
-              chihiros::next_seq(id(cmd_seq_wrgb2)));
+            return chihiros::reset_auto(chihiros::next_seq(id(cmd_seq_wrgb2)));
       - delay: 200ms
       # Stap 4: RTC — device evalueert schema op huidig tijdstip
       - ble_client.ble_write:
@@ -195,8 +185,7 @@ number:
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
-              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::BRIGHTNESS,
-                {chihiros::data::WRGB_R, (uint8_t)x},
+              return chihiros::wrgb_channel(chihiros::data::WRGB_R, (uint8_t)x,
                 chihiros::next_seq(id(cmd_seq_wrgb2)));
 
   - platform: template
@@ -217,8 +206,7 @@ number:
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
-              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::BRIGHTNESS,
-                {chihiros::data::WRGB_G, (uint8_t)x},
+              return chihiros::wrgb_channel(chihiros::data::WRGB_G, (uint8_t)x,
                 chihiros::next_seq(id(cmd_seq_wrgb2)));
 
   - platform: template
@@ -239,8 +227,7 @@ number:
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
-              return chihiros::pakket(chihiros::hdr::BASE, chihiros::cmd::BRIGHTNESS,
-                {chihiros::data::WRGB_B, (uint8_t)x},
+              return chihiros::wrgb_channel(chihiros::data::WRGB_B, (uint8_t)x,
                 chihiros::next_seq(id(cmd_seq_wrgb2)));
 
 button:

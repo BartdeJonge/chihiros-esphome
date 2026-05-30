@@ -2,6 +2,90 @@
 
 ESPHome configuration for an ESP32-S3 BLE bridge that controls Chihiros aquarium devices via Home Assistant, without the Chihiros app.
 
+## How it works (non-technical)
+
+Chihiros aquarium devices (CO2 controller, stirrer, fan, Doctor Mate, WRGB2 light, dosing pump) communicate via **Bluetooth Low Energy (BLE)**. Normally you control them through the Chihiros app on your phone.
+
+This project replaces the app with an **ESP32-S3** — a small Wi-Fi + Bluetooth chip that:
+
+1. Connects to all your Chihiros devices over Bluetooth simultaneously
+2. Connects to your home Wi-Fi network
+3. Exposes all controls to **Home Assistant** as regular entities (switches, sliders, buttons)
+
+The result: you can automate your aquarium from Home Assistant just like any other smart device — schedules, automations, dashboards, Telegram notifications, everything.
+
+```
+[Chihiros device] ←── Bluetooth ──→ [ESP32-S3] ←── Wi-Fi ──→ [Home Assistant]
+```
+
+---
+
+## Getting started with a blank ESP32-S3
+
+### What you need
+- ESP32-S3-N16R8 board (or similar ESP32-S3 with 16 MB flash)
+- USB-C cable (data, not charge-only)
+- Chrome or Edge browser on Windows/Mac (required for Web Serial)
+- A running Home Assistant instance with ESPHome add-on installed
+
+### Step 1 — Add your secrets
+
+Create a file called `secrets.yaml` in the same folder as the yaml files:
+
+```yaml
+wifi_ssid_iot: "YourWiFiNetwork"
+wifi_password_iot: "YourWiFiPassword"
+encryption_key: ""        # generate one in ESPHome dashboard
+ota_password: "choose_a_password"
+```
+
+### Step 2 — Fill in your MAC addresses
+
+Open `aquarium-ble-bridge.yaml` and replace the placeholder MAC addresses with your actual device MACs. You can find them by:
+- Opening the Chihiros app → device settings → device info
+- Or scanning with a BLE scanner app (e.g. "nRF Connect" on Android/iOS)
+
+### Step 3 — Enable the devices you want
+
+In `aquarium-ble-bridge.yaml`, uncomment the packages for the devices you want to control:
+
+```yaml
+packages:
+  co2:       !include aquarium-ble-bridge-co2.yaml
+  roerder:   !include aquarium-ble-bridge-roerder.yaml
+  ventilator: !include aquarium-ble-bridge-ventilator.yaml
+  doctor:    !include aquarium-ble-bridge-doctor.yaml
+  wrgb2:     !include aquarium-ble-bridge-wrgb2.yaml
+```
+
+### Step 4 — Flash the ESP32
+
+> **Important:** Always flash via the ESPHome dashboard using Web Serial. OTA (over-the-air) updates are unreliable when the BLE scanner is active.
+
+1. Open the **ESPHome dashboard** in Home Assistant
+2. Add a new device → paste the contents of `aquarium-ble-bridge.yaml`
+3. Click **Install** → **Plug into this computer**
+4. Connect the ESP32 via USB → select the COM port → wait for flash to complete
+5. The ESP32 will reboot and connect to Wi-Fi and your Chihiros devices automatically
+
+### Step 5 — Check the logs
+
+After flashing, open the device logs in ESPHome. You should see connection messages like:
+
+```
+[I][co2]: Auth
+[I][co2]: RTC 2026-05-30 14:23:01
+[I][co2]: CO2 verbonden
+```
+
+If a device doesn't connect, move the ESP32 closer to the aquarium and retry.
+
+### Step 6 — Add to Home Assistant
+
+The ESP32 will appear automatically in Home Assistant as a new device. All controls (sliders, buttons, switches) are immediately available.
+
+---
+
 ## Hardware
 
 - **Board**: ESP32-S3-N16R8 (`esp32-s3-devkitc-1`, `variant: esp32s3`, `flash_size: 16MB`)

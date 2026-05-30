@@ -32,8 +32,7 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
               ESP_LOGI("dosing", "Auth");
-              return chihiros::pakket(chihiros::hdr::DEVICE, chihiros::cmd::AUTH,
-                {chihiros::data::AUTH_BASE}, id(cmd_seq_dosing)++);
+              return chihiros::auth_device(id(cmd_seq_dosing)++);
         - delay: 200ms
         # Stap 2: RTC sync
         - ble_client.ble_write:

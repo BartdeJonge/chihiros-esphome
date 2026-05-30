@@ -102,4 +102,91 @@ inline std::vector<uint8_t> roerder_toggle(uint8_t seq, int channel, bool on) {
     return pakket(hdr::DEVICE, cmd::STIR_TOGGLE, d, seq);
 }
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+inline std::vector<uint8_t> auth(uint8_t seq) {
+    return pakket(hdr::BASE, cmd::AUTH, {data::AUTH_BASE}, seq);
+}
+inline std::vector<uint8_t> auth_device(uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::AUTH, {data::AUTH_BASE}, seq);
+}
+inline std::vector<uint8_t> auth_ext1(uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::AUTH, {data::AUTH_EXT1}, seq);
+}
+inline std::vector<uint8_t> auth_ext2(uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::AUTH, {data::AUTH_EXT2}, seq);
+}
+
+// ── Mode ──────────────────────────────────────────────────────────────────────
+
+inline std::vector<uint8_t> reset_schema(uint8_t seq) {
+    return pakket(hdr::BASE, cmd::MODE, {data::RESET_SCHEMA, data::SKIP, data::SKIP}, seq);
+}
+inline std::vector<uint8_t> reset_auto(uint8_t seq) {
+    return pakket(hdr::BASE, cmd::MODE, {data::RESET_AUTO, data::SKIP, data::SKIP}, seq);
+}
+// Fan silent mode / WRGB2 mode init — caller supplies the mode byte
+inline std::vector<uint8_t> set_mode(uint8_t mode_byte, uint8_t seq) {
+    return pakket(hdr::BASE, cmd::MODE, {mode_byte, data::SKIP, data::SKIP}, seq);
+}
+
+// ── CO2 ───────────────────────────────────────────────────────────────────────
+
+inline std::vector<uint8_t> co2_schema(uint8_t hour, uint8_t minute, uint8_t val, uint8_t seq) {
+    return pakket(hdr::BASE, cmd::SCHEMA, {hour, minute, val}, seq);
+}
+
+// ── Fan ───────────────────────────────────────────────────────────────────────
+
+inline std::vector<uint8_t> fan_speed(uint8_t speed, uint8_t seq) {
+    return pakket(hdr::BASE, cmd::FAN_SPEED, {data::SKIP, speed}, seq);
+}
+inline std::vector<uint8_t> fan_temp_thresh(uint8_t start_c, uint8_t max_c, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::TEMP_THRESH, {start_c, max_c, data::SKIP}, seq);
+}
+
+// ── Stirrer ───────────────────────────────────────────────────────────────────
+
+inline std::vector<uint8_t> stir_enable(uint8_t channel, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_ENABLE, {channel, 0x00, 0x01}, seq);
+}
+inline std::vector<uint8_t> stir_speed(uint8_t channel, uint8_t speed_0_127, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_SPEED, {channel, speed_0_127, 0x01, 0x00, 0x00, 0x00}, seq);
+}
+inline std::vector<uint8_t> stir_timer(uint8_t channel, uint8_t duration, uint8_t interval, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_TIMER, {channel, 0x00, duration, interval, 0x00, 0x00}, seq);
+}
+inline std::vector<uint8_t> stir_apply(uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_APPLY, {0x00}, seq);
+}
+// Restores all 4 channels in one write; each kN is 0x01 (on) or 0x00 (off).
+inline std::vector<uint8_t> stir_restore(uint8_t k0, uint8_t k1, uint8_t k2, uint8_t k3, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_TOGGLE,
+        {data::SKIP, data::SKIP, k0, k1, k2, k3, data::SKIP, data::SKIP, data::SKIP, data::SKIP}, seq);
+}
+
+// ── WRGB2 ─────────────────────────────────────────────────────────────────────
+
+inline std::vector<uint8_t> wrgb_channel(uint8_t channel, uint8_t brightness, uint8_t seq) {
+    return pakket(hdr::BASE, cmd::BRIGHTNESS, {channel, brightness}, seq);
+}
+// weekdays bitmask: Mon=64 Tue=32 Wed=16 Thu=8 Fri=4 Sat=2 Sun=1; 127 = every day
+// ramp_min must not equal 90 (= 0x5a frame header) — caller must sanitize
+inline std::vector<uint8_t> wrgb_schedule(uint8_t on_h, uint8_t on_m,
+                                           uint8_t off_h, uint8_t off_m,
+                                           uint8_t ramp_min, uint8_t weekdays,
+                                           uint8_t r, uint8_t g, uint8_t b,
+                                           uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::SCHEDULE,
+        {on_h, on_m, off_h, off_m, ramp_min, weekdays, r, g, b,
+         data::SKIP, data::SKIP, data::SKIP, data::SKIP, data::SKIP}, seq);
+}
+
+// ── Doctor Mate / Dosing ──────────────────────────────────────────────────────
+
+// Doctor Mate: b1=0x00 always; b2=ec for TDS (pos 1) or volume for Volume (pos 2).
+inline std::vector<uint8_t> device_settings(uint8_t b1, uint8_t b2, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::SETTINGS, {b1, b2}, seq);
+}
+
 } // namespace chihiros
