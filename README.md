@@ -398,9 +398,9 @@ Connect + auth + notification logging is implemented. To reverse-engineer: flash
 Every Chihiros device advertises a BLE name in the format `DY{type}{MAC}` — the type prefix is encoded directly in the name. The firmware uses this to automatically identify any Chihiros device within range that is not yet in your configuration:
 
 ```
-[I][ble_scan]: Chihiros gevonden: WRGB2 light         → gebruik als wrgb2_mac | MAC=CF:20:3B:6D:17:C1 RSSI=-62
-[I][ble_scan]: Chihiros gevonden: CO2 controller      → gebruik als co2_mac   | MAC=CC:A0:27:8E:79:E9 RSSI=-58
-[I][ble_scan]: Chihiros gevonden: Magnetic stirrer    → gebruik als roerder_mac | MAC=D3:A1:88:0F:7C:42 RSSI=-71
+[I][ble_scan]: Chihiros found: WRGB2 light         -> set as wrgb2_mac | MAC=CF:20:3B:6D:17:C1 RSSI=-62
+[I][ble_scan]: Chihiros found: CO2 controller      -> set as co2_mac   | MAC=CC:A0:27:8E:79:E9 RSSI=-58
+[I][ble_scan]: Chihiros found: Magnetic stirrer    -> set as roerder_mac | MAC=D3:A1:88:0F:7C:42 RSSI=-71
 ```
 
 ```mermaid
@@ -410,7 +410,7 @@ sequenceDiagram
 
     WRG-->>ESP: BLE advertise "DYNT90CF203B6D17C1"
     Note over ESP: prefix DYNT90 → WRGB2 light<br/>MAC = CF:20:3B:6D:17:C1
-    ESP->>ESP: log "WRGB2 light → gebruik als wrgb2_mac | MAC=CF:20:3B:6D:17:C1"
+    ESP->>ESP: log "WRGB2 light -> set as wrgb2_mac | MAC=CF:20:3B:6D:17:C1"
 ```
 
 Known prefixes:

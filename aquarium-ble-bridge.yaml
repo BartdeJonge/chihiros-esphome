@@ -95,14 +95,14 @@ esp32_ble_tracker:
                 mac == "${ventilator_mac}" || mac == "${doctor_mac}" ||
                 mac == "${wrgb2_mac}" || mac == "${dosing_mac}") return;
             // Identificeer apparaattype uit naam-prefix (DY{type}{MAC_zonder_dubbele_punten})
-            const char* type = "Onbekend type";
-            if      (name.rfind("DYNT90", 0) == 0) type = "WRGB2 light         → gebruik als wrgb2_mac";
-            else if (name.rfind("DYPCO2", 0) == 0) type = "CO2 controller      → gebruik als co2_mac";
-            else if (name.rfind("DYMIX",  0) == 0) type = "Magnetic stirrer    → gebruik als roerder_mac";
-            else if (name.rfind("DYNFAN", 0) == 0) type = "Cooling fan         → gebruik als ventilator_mac";
-            else if (name.rfind("DYNDOC", 0) == 0) type = "Doctor Mate         → gebruik als doctor_mac";
-            else if (name.rfind("DYDOSE", 0) == 0) type = "Dosing pump         → gebruik als dosing_mac";
-            ESP_LOGI("ble_scan", "Chihiros gevonden: %s | MAC=%s RSSI=%d",
+            const char* type = "Unknown type";
+            if      (name.rfind("DYNT90", 0) == 0) type = "WRGB2 light         -> set as wrgb2_mac";
+            else if (name.rfind("DYPCO2", 0) == 0) type = "CO2 controller      -> set as co2_mac";
+            else if (name.rfind("DYMIX",  0) == 0) type = "Magnetic stirrer    -> set as roerder_mac";
+            else if (name.rfind("DYNFAN", 0) == 0) type = "Cooling fan         -> set as ventilator_mac";
+            else if (name.rfind("DYNDOC", 0) == 0) type = "Doctor Mate         -> set as doctor_mac";
+            else if (name.rfind("DYDOSE", 0) == 0) type = "Dosing pump         -> set as dosing_mac";
+            ESP_LOGI("ble_scan", "Chihiros found: %s | MAC=%s RSSI=%d",
               type, mac.c_str(), x.get_rssi());
 
 packages:
