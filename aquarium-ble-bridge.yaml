@@ -64,8 +64,16 @@ api:
           lambda: return !id(co2_boot_klaar);
         then:
           - lambda: id(co2_boot_klaar) = true;
-          - switch.turn_on: wrgb2_verbinding
-          - switch.turn_on: ventilator_verbinding
+          - if:
+              condition:
+                lambda: return strcmp("${wrgb2_mac}", "00:00:00:00:00:00") != 0;
+              then:
+                - switch.turn_on: wrgb2_verbinding
+          - if:
+              condition:
+                lambda: return strcmp("${ventilator_mac}", "00:00:00:00:00:00") != 0;
+              then:
+                - switch.turn_on: ventilator_verbinding
 
 ota:
   - platform: esphome

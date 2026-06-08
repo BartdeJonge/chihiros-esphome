@@ -106,7 +106,7 @@ interval:
     then:
       - if:
           condition:
-            lambda: return id(co2_boot_klaar);
+            lambda: return id(co2_boot_klaar) && strcmp("${ventilator_mac}", "00:00:00:00:00:00") != 0;
           then:
             - switch.turn_on: ventilator_verbinding
 
