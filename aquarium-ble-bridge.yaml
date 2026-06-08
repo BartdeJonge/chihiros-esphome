@@ -39,7 +39,7 @@ esp32:
 
 wifi:
   ssid: !secret wifi_ssid_iot
-  password: !secret wifi_password_iot
+  password: !secret wifi_password
   fast_connect: enable
 
 logger:
