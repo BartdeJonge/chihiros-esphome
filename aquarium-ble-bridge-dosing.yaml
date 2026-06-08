@@ -54,7 +54,7 @@ switch:
     ble_client_id: chihiros_dosing
     id: dosing_verbinding
     internal: true
-    restore_mode: ALWAYS_ON
+    restore_mode: RESTORE_DEFAULT_OFF
 
 button:
   # TODO: invullen zodra CMD_DOSE_MANUAL bekend is
@@ -77,12 +77,6 @@ button:
             #         {volume_byte}, id(cmd_seq_dosing)++);
 
 sensor:
-  - platform: ble_client
-    type: rssi
-    ble_client_id: chihiros_dosing
-    name: "Dosing RSSI"
-    update_interval: 60s
-
   # Logt alle notificaties — gebruik dit na eerste connect om het protocol te ontcijferen.
   # Kijk naar:
   #   - Welke bytes veranderen bij een handmatige dosis
