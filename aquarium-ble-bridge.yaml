@@ -38,7 +38,7 @@ esp32:
       CONFIG_BT_ACL_CONNECTIONS: "7"
 
 wifi:
-  ssid: !secret wifi_sid
+  ssid: !secret wifi_ssid_iot
   password: !secret wifi_password_iot
   fast_connect: enable
 
