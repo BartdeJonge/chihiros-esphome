@@ -165,6 +165,11 @@ inline std::vector<uint8_t> stir_restore(uint8_t k0, uint8_t k1, uint8_t k2, uin
         {data::SKIP, data::SKIP, k0, k1, k2, k3, data::SKIP, data::SKIP, data::SKIP, data::SKIP}, seq);
 }
 
+// Percentage-based speed (0-100%) → device scale (0-127).
+inline std::vector<uint8_t> stir_speed_pct(uint8_t channel, float pct, uint8_t seq) {
+    return stir_speed(channel, (uint8_t)(pct * 127.0f / 100.0f), seq);
+}
+
 // ── WRGB2 ─────────────────────────────────────────────────────────────────────
 
 inline std::vector<uint8_t> wrgb_channel(uint8_t channel, uint8_t brightness, uint8_t seq) {

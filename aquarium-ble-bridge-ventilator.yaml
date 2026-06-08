@@ -9,6 +9,10 @@
 #   3. Extra auth [06] — ventilator-specifieke extra authenticatie
 #   4. Extra auth [08] — tweede ventilator-specifieke auth
 #   5. Mode init       — stuurt de opgeslagen silent-mode stand
+#   6. Drempel         — watertemperatuur start/max
+#   7. Snelheid        — handmatige snelheid (0 = auto)
+#   8. Wachten         — 2s wachten op notificaties van apparaat
+#   9. Disconnect
 #
 # Notificaties van het apparaat (byte-posities in het ontvangen frame):
 #   byte[5]       = ventilatorsnelheid (%)
@@ -16,19 +20,15 @@
 #   byte[11]/10   = watertemperatuur (°C)
 #   byte[12]      = luchtvochtigheid (%)
 #
-# Protocol: auth (0x5a) → RTC ×2 → extra auth (0xa5 [06]) → extra auth (0xa5 [08]) → mode init
-# Silent mode:  0x5a cmd=0x05 [0x22=aan / 0x23=uit, ff, ff]
-# Temp drempel: 0xa5 cmd=0x21 [start_°C, max_°C, 0xff]
-# Handmatig:    0x5a cmd=0x07 [ff, speed 0-20]  (0=auto)
+# VERBINDING: periodiek (elke 5 min) — verbindt voor temp-lezing, verbreekt daarna.
+# Ventilator regelt zichzelf o.b.v. temperatuurdrempels; BLE alleen voor monitoring en config.
 
 globals:
   - id: cmd_seq_ventilator
     type: uint8_t
-    restore_value: false  # sequentieteller hoeft niet te overleven na crash
+    restore_value: false
     initial_value: '1'
 
-  # Silent mode staat — overleeft een crash via NVS, zodat de lambda de juiste
-  # staat teruggeeft aan HA na een herstart (zie switch hieronder)
   - id: ventilator_silent_mode
     type: bool
     restore_value: true
@@ -40,111 +40,95 @@ ble_client:
     on_connect:
       then:
         - delay: 500ms
-        # Stap 1: standaard Chihiros auth
+        - logger.log: "ventilator: Auth"
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth(id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - logger.log:
+            format: "ventilator: RTC %04d-%02d-%02d %02d:%02d:%02d"
+            args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - logger.log: "ventilator: extra auth [06]"
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth_ext1(id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - logger.log: "ventilator: extra auth [08]"
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth_ext2(id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - logger.log: "ventilator: mode init"
         - ble_client.ble_write:
             id: chihiros_ventilator
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
             value: !lambda |-
-              ESP_LOGI("ventilator", "Auth");
-              return chihiros::auth(id(cmd_seq_ventilator)++);
+              return chihiros::set_mode(id(ventilator_silent_mode) ? chihiros::data::SILENT_ON : chihiros::data::SILENT_OFF, id(cmd_seq_ventilator)++);
         - delay: 200ms
-        # Stap 2a: RTC sync (eerste keer, met log)
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              auto t = id(ha_time).now();
-              ESP_LOGI("ventilator", "RTC");
-              return chihiros::rtc_pakket(t, id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        # Stap 2b: RTC sync (tweede keer — zo doet de app het ook)
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              auto t = id(ha_time).now();
-              return chihiros::rtc_pakket(t, id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        # Stap 3: extra auth [06] — ventilator-specifiek, doel onbekend
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              ESP_LOGI("ventilator", "Extra auth [06]");
-              return chihiros::auth_ext1(id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        # Stap 4: extra auth [08] — ventilator-specifiek, doel onbekend
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              ESP_LOGI("ventilator", "Extra auth [08]");
-              return chihiros::auth_ext2(id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        # Stap 5: herstel silent mode op basis van de opgeslagen global
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              uint8_t mode = id(ventilator_silent_mode) ? chihiros::data::SILENT_ON : chihiros::data::SILENT_OFF;
-              ESP_LOGI("ventilator", "Mode init: %s", mode == chihiros::data::SILENT_ON ? "silent" : "normaal");
-              return chihiros::set_mode(mode, id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        # Stap 6: herstel temperatuurdrempels (apparaat vergeet deze na stroomonderbreking)
         - script.execute: stuur_ventilator_drempel
         - script.wait: stuur_ventilator_drempel
-        - logger.log: "Ventilator verbonden"
+        - logger.log:
+            format: "ventilator: snelheid=%d"
+            args: ["(int)id(num_ventilator_snelheid).state"]
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::fan_speed((uint8_t)id(num_ventilator_snelheid).state, id(cmd_seq_ventilator)++);
+        - delay: 2000ms
+        - switch.turn_off: ventilator_verbinding
+        - logger.log: "ventilator: init klaar, verbinding verbroken"
     on_disconnect:
       then:
-        - logger.log: "Ventilator verbinding verbroken"
+        - logger.log: "ventilator: verbinding verbroken"
+
+interval:
+  - interval: 5min
+    then:
+      - if:
+          condition:
+            lambda: return id(co2_boot_klaar);
+          then:
+            - switch.turn_on: ventilator_verbinding
 
 script:
-  # Stuurt de huidige silent mode stand naar het apparaat.
-  # Wordt aangeroepen vanuit de switch (turn_on/turn_off) en leest dan
-  # de global die net is bijgewerkt.
-  - id: stuur_ventilator_silent
-    then:
-      - ble_client.ble_write:
-          id: chihiros_ventilator
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t mode = id(ventilator_silent_mode) ? chihiros::data::SILENT_ON : chihiros::data::SILENT_OFF;
-            ESP_LOGI("ventilator", "Silent mode: %s", mode == chihiros::data::SILENT_ON ? "AAN" : "UIT");
-            return chihiros::set_mode(mode, id(cmd_seq_ventilator)++);
-
-  # Stuurt de temperatuurdrempels naar het apparaat.
-  # Wordt aangeroepen als start- of max-temperatuur wijzigt in HA.
-  # Leest de waarden direct van de number-entities (die hebben zelf restore_value:true).
   - id: stuur_ventilator_drempel
     then:
+      - logger.log:
+          format: "ventilator: drempel start=%d max=%d"
+          args: ["(int)id(num_ventilator_start_temp).state", "(int)id(num_ventilator_max_temp).state"]
       - ble_client.ble_write:
           id: chihiros_ventilator
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t start = (uint8_t)id(num_ventilator_start_temp).state;
-            uint8_t max   = (uint8_t)id(num_ventilator_max_temp).state;
-            ESP_LOGI("ventilator", "Drempel start=%d max=%d", start, max);
-            return chihiros::fan_temp_thresh(start, max, id(cmd_seq_ventilator)++);
+          value: !lambda return chihiros::fan_temp_thresh((uint8_t)id(num_ventilator_start_temp).state, (uint8_t)id(num_ventilator_max_temp).state, id(cmd_seq_ventilator)++);
 
 switch:
-  # Interne verbindingsschakelaar — houdt de BLE-link altijd actief
   - platform: ble_client
     ble_client_id: chihiros_ventilator
     id: ventilator_verbinding
     internal: true
-    restore_mode: ALWAYS_ON
+    restore_mode: RESTORE_DEFAULT_OFF
 
-  # Silent mode schakelaar.
-  # lambda: leest de global → geeft juiste staat aan HA ook na een crash/herstart.
-  # turn_on/off: slaat eerst op in global (NVS), stuurt daarna BLE commando.
   - platform: template
     name: "Ventilator silent mode"
     id: sw_ventilator_silent
@@ -152,13 +136,32 @@ switch:
     lambda: return id(ventilator_silent_mode);
     turn_on_action:
       - lambda: id(ventilator_silent_mode) = true;
-      - script.execute: stuur_ventilator_silent
+      - if:
+          condition:
+            lambda: return id(co2_boot_klaar);
+          then:
+            - switch.turn_on: ventilator_verbinding
     turn_off_action:
       - lambda: id(ventilator_silent_mode) = false;
-      - script.execute: stuur_ventilator_silent
+      - if:
+          condition:
+            lambda: return id(co2_boot_klaar);
+          then:
+            - switch.turn_on: ventilator_verbinding
+
+button:
+  - platform: template
+    name: "Ventilator RTC sync"
+    id: btn_ventilator_rtc_sync
+    icon: mdi:clock-sync
+    on_press:
+      - if:
+          condition:
+            lambda: return id(co2_boot_klaar);
+          then:
+            - switch.turn_on: ventilator_verbinding
 
 number:
-  # Starttemperatuur: bij deze watertemperatuur begint de ventilator
   - platform: template
     name: "Ventilator starttemperatuur"
     id: num_ventilator_start_temp
@@ -172,9 +175,12 @@ number:
     optimistic: true
     on_value:
       then:
-        - script.execute: stuur_ventilator_drempel
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - switch.turn_on: ventilator_verbinding
 
-  # Maximale koeling: bij deze temperatuur draait de ventilator op 100%
   - platform: template
     name: "Ventilator maximale koeling"
     id: num_ventilator_max_temp
@@ -188,9 +194,12 @@ number:
     optimistic: true
     on_value:
       then:
-        - script.execute: stuur_ventilator_drempel
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - switch.turn_on: ventilator_verbinding
 
-  # Handmatige snelheid: 0 = auto (apparaat regelt zelf), 1-20 = vast
   - platform: template
     name: "Ventilator handmatige snelheid"
     id: num_ventilator_snelheid
@@ -204,24 +213,13 @@ number:
     optimistic: true
     on_value:
       then:
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              uint8_t speed = (uint8_t)x;
-              ESP_LOGI("ventilator", "Snelheid=%d", speed);
-              return chihiros::fan_speed(speed, id(cmd_seq_ventilator)++);
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - switch.turn_on: ventilator_verbinding
 
 sensor:
-  - platform: ble_client
-    type: rssi
-    ble_client_id: chihiros_ventilator
-    name: "Ventilator RSSI"
-    update_interval: 60s
-
-  # Ontvangt notificaties van het apparaat met sensor-data.
-  # Het frame wordt alleen verwerkt als byte[4] == 0x01 (data-frame).
   - platform: ble_client
     type: characteristic
     ble_client_id: chihiros_ventilator

@@ -1,4 +1,10 @@
 # --- CO2 CONTROLLER ---
+
+esp32_ble_tracker:
+  on_ble_advertise:
+    - mac_address: ${co2_mac}
+      then:
+        - lambda: ESP_LOGI("co2", "CO2 controller gevonden! RSSI=%d", x.get_rssi());
 #
 # Protocol afgeleid uit btsnoop HCI logs (2026-05-30):
 #
@@ -20,178 +26,145 @@ globals:
     restore_value: true
     initial_value: 'true'
 
+  - id: co2_rtc_only
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
 ble_client:
   - mac_address: ${co2_mac}
     id: chihiros_co2
     on_connect:
       then:
         - delay: 500ms
+        # Verplichte Chihiros-handshake — apparaat weigert commando's zonder auth
+        - logger.log: "co2: Auth"
         - ble_client.ble_write:
             id: chihiros_co2
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              ESP_LOGI("co2", "Auth");
-              return chihiros::auth(id(cmd_seq_co2)++);
-        - delay: 200ms
-        - ble_client.ble_write:
-            id: chihiros_co2
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              auto t = id(ha_time).now();
-              ESP_LOGI("co2", "RTC %04d-%02d-%02d %02d:%02d:%02d", t.year, t.month, t.day_of_month, t.hour, t.minute, t.second);
-              return chihiros::rtc_pakket(t, id(cmd_seq_co2)++);
-        - delay: 200ms
-        - ble_client.ble_write:
-            id: chihiros_co2
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              auto t = id(ha_time).now();
-              return chihiros::rtc_pakket(t, id(cmd_seq_co2)++);
-        - delay: 200ms
-        - ble_client.ble_write:
-            id: chihiros_co2
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              ESP_LOGI("co2", "RESET_SCHEMA");
-              return chihiros::reset_schema(id(cmd_seq_co2)++);
+            value: !lambda return chihiros::auth(id(cmd_seq_co2)++);
         - delay: 200ms
         - if:
             condition:
-              lambda: return id(co2_schema_actief);
+              lambda: return id(co2_rtc_only);
             then:
+              # RTC sync only — geen config
+              - logger.log:
+                  format: "co2: RTC sync %04d-%02d-%02d %02d:%02d:%02d"
+                  args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
               - ble_client.ble_write:
                   id: chihiros_co2
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda |-
-                    uint8_t h = (uint8_t)id(co2_start_uur).state;
-                    uint8_t m = (uint8_t)id(co2_start_min).state;
-                    ESP_LOGI("co2", "Connect: start %02d:%02d → ON", h, m);
-                    return chihiros::co2_schema(h, m, chihiros::data::CO2_ON, id(cmd_seq_co2)++);
-              - delay: 100ms
-              - ble_client.ble_write:
-                  id: chihiros_co2
-                  service_uuid: ${ble_service}
-                  characteristic_uuid: ${ble_tx}
-                  value: !lambda |-
-                    uint8_t h = (uint8_t)id(co2_eind_uur).state;
-                    uint8_t m = (uint8_t)id(co2_eind_min).state;
-                    ESP_LOGI("co2", "Connect: eind %02d:%02d → OFF", h, m);
-                    return chihiros::co2_schema(h, m, chihiros::data::CO2_OFF, id(cmd_seq_co2)++);
+                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_co2)++);
+              - delay: 200ms
+              - lambda: id(co2_rtc_only) = false;
+              - switch.turn_off: co2_verbinding
+              - logger.log: "co2: RTC sync klaar"
             else:
+              # Volledige config: RTC ×2 → schema reset → tijdslots
+              # Synchroniseert de interne klok — apparaat gebruikt RTC voor CO2-schema's
+              # App stuurt RTC twee keer; we volgen dat gedrag
+              - logger.log:
+                  format: "co2: RTC %04d-%02d-%02d %02d:%02d:%02d"
+                  args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
               - ble_client.ble_write:
                   id: chihiros_co2
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda |-
-                    uint8_t h = (uint8_t)id(co2_start_uur).state;
-                    uint8_t m = (uint8_t)id(co2_start_min).state;
-                    ESP_LOGI("co2", "Connect: start %02d:%02d → EMPTY (inactief)", h, m);
-                    return chihiros::co2_schema(h, m, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
-              - delay: 100ms
+                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_co2)++);
+              - delay: 200ms
               - ble_client.ble_write:
                   id: chihiros_co2
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda |-
-                    uint8_t h = (uint8_t)id(co2_eind_uur).state;
-                    uint8_t m = (uint8_t)id(co2_eind_min).state;
-                    ESP_LOGI("co2", "Connect: eind %02d:%02d → EMPTY (inactief)", h, m);
-                    return chihiros::co2_schema(h, m, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
-        - logger.log: "CO2 verbonden"
+                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_co2)++);
+              - delay: 200ms
+              # Wist alle tijdslots in het apparaat — zodat we een schone lei hebben
+              - logger.log: "co2: reset schema"
+              - ble_client.ble_write:
+                  id: chihiros_co2
+                  service_uuid: ${ble_service}
+                  characteristic_uuid: ${ble_tx}
+                  value: !lambda return chihiros::reset_schema(id(cmd_seq_co2)++);
+              - delay: 200ms
+              - if:
+                  condition:
+                    lambda: return id(co2_schema_actief);
+                  then:
+                    # Schema actief: CO2 aan op fotoperiode_start - co2_prestart, uit op fotoperiode_eind
+                    - logger.log:
+                        format: "co2: start fotoperiode %02d:%02d - %d min → ON"
+                        args: ["id(fotoperiode_start).hour", "id(fotoperiode_start).minute", "(int)id(co2_prestart).state"]
+                    - ble_client.ble_write:
+                        id: chihiros_co2
+                        service_uuid: ${ble_service}
+                        characteristic_uuid: ${ble_tx}
+                        value: !lambda |-
+                          int total = id(fotoperiode_start).hour * 60 + id(fotoperiode_start).minute - (int)id(co2_prestart).state;
+                          if (total < 0) total += 1440;
+                          return chihiros::co2_schema(total / 60, total % 60, chihiros::data::CO2_ON, id(cmd_seq_co2)++);
+                    - delay: 100ms
+                    - logger.log:
+                        format: "co2: eind %02d:%02d → OFF"
+                        args: ["id(fotoperiode_eind).hour", "id(fotoperiode_eind).minute"]
+                    - ble_client.ble_write:
+                        id: chihiros_co2
+                        service_uuid: ${ble_service}
+                        characteristic_uuid: ${ble_tx}
+                        value: !lambda return chihiros::co2_schema(id(fotoperiode_eind).hour, id(fotoperiode_eind).minute, chihiros::data::CO2_OFF, id(cmd_seq_co2)++);
+                  else:
+                    # Schema inactief: stuur EMPTY-slots zodat apparaat geen CO2 opent
+                    - logger.log: "co2: schema deactiveren (EMPTY)"
+                    - ble_client.ble_write:
+                        id: chihiros_co2
+                        service_uuid: ${ble_service}
+                        characteristic_uuid: ${ble_tx}
+                        value: !lambda |-
+                          int total = id(fotoperiode_start).hour * 60 + id(fotoperiode_start).minute - (int)id(co2_prestart).state;
+                          if (total < 0) total += 1440;
+                          return chihiros::co2_schema(total / 60, total % 60, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
+                    - delay: 100ms
+                    - ble_client.ble_write:
+                        id: chihiros_co2
+                        service_uuid: ${ble_service}
+                        characteristic_uuid: ${ble_tx}
+                        value: !lambda return chihiros::co2_schema(id(fotoperiode_eind).hour, id(fotoperiode_eind).minute, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
+              - delay: 200ms
+              - switch.turn_off: co2_verbinding
+              - logger.log: "co2: instellingen verstuurd, verbinding verbroken"
     on_disconnect:
       then:
-        - logger.log: "CO2 verbinding verbroken"
-
-script:
-  # Stuurt schema naar apparaat — RESET_SCHEMA wist alle bestaande slots.
-  # Geen old-waarden nodig: alle slots worden geleegd voor het instellen.
-  - id: stuur_schema
-    then:
-      - ble_client.ble_write:
-          id: chihiros_co2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            ESP_LOGI("co2", "RESET_SCHEMA (wis alle slots)");
-            return chihiros::reset_schema(id(cmd_seq_co2)++);
-      - delay: 200ms
-      - ble_client.ble_write:
-          id: chihiros_co2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t h = (uint8_t)id(co2_start_uur).state;
-            uint8_t m = (uint8_t)id(co2_start_min).state;
-            ESP_LOGI("co2", "Schema start=%02d:%02d → ON", h, m);
-            return chihiros::co2_schema(h, m, chihiros::data::CO2_ON, id(cmd_seq_co2)++);
-      - delay: 100ms
-      - ble_client.ble_write:
-          id: chihiros_co2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t h = (uint8_t)id(co2_eind_uur).state;
-            uint8_t m = (uint8_t)id(co2_eind_min).state;
-            ESP_LOGI("co2", "Schema eind=%02d:%02d → OFF", h, m);
-            return chihiros::co2_schema(h, m, chihiros::data::CO2_OFF, id(cmd_seq_co2)++);
-      - logger.log: "CO2 schema verstuurd"
-
-  # Deactiveert schema — stuurt EMPTY voor beide slots.
-  # Apparaat sluit klep direct na ontvangst.
-  - id: deactiveer_schema
-    then:
-      - ble_client.ble_write:
-          id: chihiros_co2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t h = (uint8_t)id(co2_start_uur).state;
-            uint8_t m = (uint8_t)id(co2_start_min).state;
-            ESP_LOGI("co2", "Deactiveer: start %02d:%02d → EMPTY", h, m);
-            return chihiros::co2_schema(h, m, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
-      - delay: 100ms
-      - ble_client.ble_write:
-          id: chihiros_co2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t h = (uint8_t)id(co2_eind_uur).state;
-            uint8_t m = (uint8_t)id(co2_eind_min).state;
-            ESP_LOGI("co2", "Deactiveer: eind %02d:%02d → EMPTY", h, m);
-            return chihiros::co2_schema(h, m, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
-      - logger.log: "CO2 schema gedeactiveerd"
+        - logger.log: "co2: verbinding verbroken"
 
 switch:
   - platform: ble_client
     ble_client_id: chihiros_co2
-    id: co2_connect
+    id: co2_verbinding
     internal: true
-    restore_mode: ALWAYS_ON
+    restore_mode: RESTORE_DEFAULT_OFF
 
   - platform: template
     name: "CO2 schema actief"
     id: sw_co2_schema_actief
     icon: mdi:molecule-co2
+    restore_mode: RESTORE_DEFAULT_ON
     lambda: return id(co2_schema_actief);
     turn_on_action:
       - lambda: id(co2_schema_actief) = true;
       - if:
           condition:
-            switch.is_on: co2_connect
+            lambda: return id(co2_boot_klaar);
           then:
-            - script.execute: stuur_schema
+            - switch.turn_on: co2_verbinding
     turn_off_action:
       - lambda: id(co2_schema_actief) = false;
       - if:
           condition:
-            switch.is_on: co2_connect
+            lambda: return id(co2_boot_klaar);
           then:
-            - script.execute: deactiveer_schema
+            - switch.turn_on: co2_verbinding
 
 button:
   - platform: template
@@ -201,64 +174,24 @@ button:
     on_press:
       - if:
           condition:
-            switch.is_on: co2_connect
+            lambda: return id(co2_boot_klaar);
           then:
-            - script.execute: stuur_schema
+            - switch.turn_on: co2_verbinding
 
   - platform: template
-    name: "RTC sync"
-    id: btn_rtc_sync
+    name: "CO2 RTC sync"
+    id: btn_co2_rtc_sync
     icon: mdi:clock-sync
     on_press:
       - if:
           condition:
-            switch.is_on: co2_connect
+            lambda: return id(co2_boot_klaar);
           then:
-            - ble_client.ble_write:
-                id: chihiros_co2
-                service_uuid: ${ble_service}
-                characteristic_uuid: ${ble_tx}
-                value: !lambda |-
-                  auto t = id(ha_time).now();
-                  ESP_LOGI("co2", "RTC sync");
-                  return chihiros::rtc_pakket(t, id(cmd_seq_co2)++);
-      - if:
-          condition:
-            switch.is_on: roerder_verbinding
-          then:
-            - ble_client.ble_write:
-                id: chihiros_roerder
-                service_uuid: ${ble_service}
-                characteristic_uuid: ${ble_tx}
-                value: !lambda |-
-                  auto t = id(ha_time).now();
-                  ESP_LOGI("roerder", "RTC sync");
-                  return chihiros::rtc_pakket(t, id(cmd_seq_roerder)++);
+            - lambda: id(co2_rtc_only) = true;
+            - switch.turn_on: co2_verbinding
+
 
 sensor:
-  - platform: homeassistant
-    id: co2_start_uur
-    entity_id: input_datetime.aquarium_co2_start
-    attribute: hour
-  - platform: homeassistant
-    id: co2_start_min
-    entity_id: input_datetime.aquarium_co2_start
-    attribute: minute
-  - platform: homeassistant
-    id: co2_eind_uur
-    entity_id: input_datetime.aquarium_co2_eind
-    attribute: hour
-  - platform: homeassistant
-    id: co2_eind_min
-    entity_id: input_datetime.aquarium_co2_eind
-    attribute: minute
-
-  - platform: ble_client
-    type: rssi
-    ble_client_id: chihiros_co2
-    name: "CO2 RSSI"
-    update_interval: 30s
-
   - platform: ble_client
     type: characteristic
     ble_client_id: chihiros_co2

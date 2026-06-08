@@ -29,105 +29,149 @@ globals:
     restore_value: false
     initial_value: '1'
 
+  - id: doctor_rtc_only
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
 ble_client:
   - mac_address: ${doctor_mac}
     id: chihiros_doctor
     on_connect:
       then:
         - delay: 500ms
-        # Stap 1: auth (0xa5 — Doctor gebruikt 0xa5 voor auth, niet 0x5a)
+        # Doctor gebruikt 0xa5 (DEVICE) voor auth, niet de standaard 0x5a
+        - logger.log: "doctor: Auth"
         - ble_client.ble_write:
             id: chihiros_doctor
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              ESP_LOGI("doctor", "Auth");
-              return chihiros::auth_device(id(cmd_seq_doctor)++);
+            value: !lambda return chihiros::auth_device(id(cmd_seq_doctor)++);
         - delay: 200ms
-        # Stap 2: RTC sync
-        - ble_client.ble_write:
-            id: chihiros_doctor
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              auto t = id(ha_time).now();
-              ESP_LOGI("doctor", "RTC");
-              return chihiros::rtc_pakket(t, id(cmd_seq_doctor)++);
-        - delay: 200ms
-        # Stap 3+4: TDS (positie 1) en Volume (positie 2) — altijd via script, volgorde essentieel
-        - script.execute: stuur_doctor_instellingen
+        - if:
+            condition:
+              lambda: return id(doctor_rtc_only);
+            then:
+              # RTC sync only — geen config
+              - logger.log:
+                  format: "doctor: RTC sync %04d-%02d-%02d %02d:%02d:%02d"
+                  args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
+              - ble_client.ble_write:
+                  id: chihiros_doctor
+                  service_uuid: ${ble_service}
+                  characteristic_uuid: ${ble_tx}
+                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_doctor)++);
+              - delay: 200ms
+              - lambda: id(doctor_rtc_only) = false;
+              - switch.turn_off: doctor_verbinding
+              - logger.log: "doctor: RTC sync klaar"
+            else:
+              # Volledige config: RTC → TDS → volume
+              # Klok synchroniseren
+              - logger.log:
+                  format: "doctor: RTC %04d-%02d-%02d %02d:%02d:%02d"
+                  args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
+              - ble_client.ble_write:
+                  id: chihiros_doctor
+                  service_uuid: ${ble_service}
+                  characteristic_uuid: ${ble_tx}
+                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_doctor)++);
+              - delay: 200ms
+              - script.execute: stuur_doctor_instellingen
+              - script.wait: stuur_doctor_instellingen
+              - delay: 200ms
+              - switch.turn_off: doctor_verbinding
+              - logger.log: "doctor: instellingen verstuurd, verbinding verbroken"
     on_disconnect:
       then:
-        - logger.log: "Doctor Mate verbinding verbroken"
+        - logger.log: "doctor: verbinding verbroken"
 
 script:
-  # Stuurt TDS target (positie 1) gevolgd door Volume (positie 2).
-  # Volgorde is essentieel — apparaat onderscheidt de twee writes alleen op volgorde.
+  # TDS (positie 1) gevolgd door Volume (positie 2) — volgorde essentieel.
+  # Apparaat onderscheidt de twee writes ALLEEN op volgorde, het frameformaat is identiek.
   - id: stuur_doctor_instellingen
     then:
+      # TDS → EC-waarde in µS/cm (ppm / 0.4), past in één byte
+      - logger.log:
+          format: "doctor: TDS %d ppm → EC 0x%02x"
+          args: ["(int)id(num_doctor_tds).state", "(uint8_t)roundf(id(num_doctor_tds).state / 0.4f)"]
       - ble_client.ble_write:
           id: chihiros_doctor
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t ec = (uint8_t)roundf(id(num_doctor_tds).state / 0.4f);
-            ESP_LOGI("doctor", "TDS %d ppm → EC %d µS/cm (0x%02x)", (int)id(num_doctor_tds).state, ec, ec);
-            return chihiros::device_settings(0x00, ec, id(cmd_seq_doctor)++);
+          value: !lambda return chihiros::device_settings(0x00, (uint8_t)roundf(id(num_doctor_tds).state / 0.4f), id(cmd_seq_doctor)++);
       - delay: 200ms
+      # Volume → liters × 2, past in één byte
+      - logger.log:
+          format: "doctor: volume %d L → 0x%02x"
+          args: ["(int)id(num_doctor_volume).state", "(uint8_t)(id(num_doctor_volume).state * 2.0f)"]
       - ble_client.ble_write:
           id: chihiros_doctor
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t vol = (uint8_t)(id(num_doctor_volume).state * 2.0f);
-            ESP_LOGI("doctor", "Volume %d L → %d (0x%02x)", (int)id(num_doctor_volume).state, vol, vol);
-            return chihiros::device_settings(0x00, vol, id(cmd_seq_doctor)++);
-      - logger.log: "Doctor Mate instellingen gestuurd"
+          value: !lambda return chihiros::device_settings(0x00, (uint8_t)(id(num_doctor_volume).state * 2.0f), id(cmd_seq_doctor)++);
+      - logger.log: "doctor: instellingen gestuurd"
 
 switch:
   - platform: ble_client
     ble_client_id: chihiros_doctor
     id: doctor_verbinding
     internal: true
-    restore_mode: ALWAYS_ON
+    restore_mode: RESTORE_DEFAULT_OFF
+
+button:
+  - platform: template
+    name: "Doctor Mate RTC sync"
+    id: btn_doctor_rtc_sync
+    icon: mdi:clock-sync
+    on_press:
+      - if:
+          condition:
+            lambda: return id(co2_boot_klaar);
+          then:
+            - lambda: id(doctor_rtc_only) = true;
+            - switch.turn_on: doctor_verbinding
 
 number:
-  # TDS doelwaarde in ppm — apparaat werkt met EC µS/cm = ppm / 0.4
-  # Maximaal ~102 ppm (EC 255 µS/cm past in één byte)
   - platform: template
     name: "Doctor Mate TDS"
     id: num_doctor_tds
     min_value: 10
-    max_value: 100
+    max_value: 200
     step: 1
-    initial_value: 80
+    initial_value: 130
     restore_value: true
     icon: mdi:water-check
     unit_of_measurement: "ppm"
     optimistic: true
     on_value:
       then:
-        - script.execute: stuur_doctor_instellingen
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - switch.turn_on: doctor_verbinding
 
-  # Tankvolume — apparaat ontvangt liters × 2, max ~127 L (255/2)
   - platform: template
     name: "Doctor Mate volume"
     id: num_doctor_volume
     min_value: 10
     max_value: 127
     step: 1
-    initial_value: 100
+    initial_value: 125
     restore_value: true
     icon: mdi:water
     unit_of_measurement: "L"
     optimistic: true
     on_value:
       then:
-        - script.execute: stuur_doctor_instellingen
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - switch.turn_on: doctor_verbinding
 
 select:
-  # Snel profiel wisselen — past TDS aan naar de preset van het gekozen profiel.
-  # Selecteren triggert num_doctor_tds.on_value → stuur_doctor_instellingen.
   - platform: template
     name: "Doctor Mate profiel"
     id: sel_doctor_profiel
@@ -143,19 +187,11 @@ select:
     on_value:
       then:
         - lambda: |-
-            if (x == "Plant (80 ppm)")       id(num_doctor_tds).make_call().set_value(80).perform();
-            else if (x == "Vis (93 ppm)")    id(num_doctor_tds).make_call().set_value(93).perform();
+            if (x == "Plant (80 ppm)")        id(num_doctor_tds).make_call().set_value(80).perform();
+            else if (x == "Vis (93 ppm)")     id(num_doctor_tds).make_call().set_value(93).perform();
             else if (x == "Garnaal (66 ppm)") id(num_doctor_tds).make_call().set_value(66).perform();
 
 sensor:
-  - platform: ble_client
-    type: rssi
-    ble_client_id: chihiros_doctor
-    name: "Doctor Mate RSSI"
-    update_interval: 60s
-
-  # Ruwe notificaties van het apparaat — byte[5] is vermoedelijk EC meting (µS/cm)
-  # Controleer de logs na eerste connect om het formaat te bevestigen
   - platform: ble_client
     type: characteristic
     ble_client_id: chihiros_doctor

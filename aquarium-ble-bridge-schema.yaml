@@ -1,0 +1,65 @@
+# --- FOTOPERIODE SCHEMA ---
+#
+# Centrale tijdlijn waarop CO2 en WRGB2 zich afstemmen:
+#   CO2 aan:   fotoperiode_start - co2_prestart (minuten)
+#   CO2 uit:   fotoperiode_eind
+#   WRGB2 aan: fotoperiode_start
+#   WRGB2 uit: fotoperiode_eind
+#
+# Wijziging in één van de drie entiteiten triggert automatisch een BLE-update
+# naar CO2 en/of WRGB2.
+
+datetime:
+  - platform: template
+    id: fotoperiode_start
+    name: "Fotoperiode start"
+    type: time
+    optimistic: true
+    restore_value: true
+    initial_value: "14:00:00"
+    icon: mdi:weather-sunset-up
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - switch.turn_on: co2_verbinding
+              - switch.turn_on: wrgb2_verbinding
+
+  - platform: template
+    id: fotoperiode_eind
+    name: "Fotoperiode eind"
+    type: time
+    optimistic: true
+    restore_value: true
+    initial_value: "21:00:00"
+    icon: mdi:weather-sunset-down
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - switch.turn_on: co2_verbinding
+              - switch.turn_on: wrgb2_verbinding
+
+number:
+  - platform: template
+    id: co2_prestart
+    name: "CO2 prestart"
+    min_value: 0
+    max_value: 180
+    step: 5
+    initial_value: 90
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "min"
+    icon: mdi:clock-minus
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - switch.turn_on: co2_verbinding

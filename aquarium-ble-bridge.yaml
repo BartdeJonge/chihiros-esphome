@@ -34,6 +34,8 @@ esp32:
   flash_size: 16MB
   framework:
     type: esp-idf
+    sdkconfig_options:
+      CONFIG_BT_ACL_CONNECTIONS: "7"
 
 wifi:
   ssid: !secret wifi_ssid_iot
@@ -41,12 +43,25 @@ wifi:
   fast_connect: enable
 
 logger:
-  level: INFO
+  level: DEBUG
   hardware_uart: USB_SERIAL_JTAG
+  logs:
+    esp32_ble_tracker: DEBUG
+    ble_client: DEBUG
+
+globals:
+  - id: co2_boot_klaar
+    type: bool
+    restore_value: false
+    initial_value: 'false'
 
 api:
   encryption:
     key: !secret encryption_key
+  on_client_connected:
+    - lambda: id(co2_boot_klaar) = true;
+    - switch.turn_on: wrgb2_verbinding
+    - switch.turn_on: ventilator_verbinding
 
 ota:
   - platform: esphome
@@ -55,18 +70,18 @@ ota:
 time:
   - platform: homeassistant
     id: ha_time
-    timezone: "Europe/Amsterdam"
+
+esp32_ble:
+  io_capability: none
+  max_connections: 5
 
 esp32_ble_tracker:
   scan_parameters:
     active: true
     interval: 320ms
-    window: 30ms
+    window: 60ms
     continuous: true
   on_ble_advertise:
-    - mac_address: ${co2_mac}
-      then:
-        - lambda: ESP_LOGI("co2", "CO2 controller gevonden! RSSI=%d", x.get_rssi());
     - then:
         - lambda: |-
             std::string name = x.get_name();
@@ -79,9 +94,10 @@ esp32_ble_tracker:
               mac.c_str(), name.c_str(), x.get_rssi());
 
 packages:
-  co2:        !include aquarium-ble-bridge-co2.yaml
+  schema:     !include aquarium-ble-bridge-schema.yaml
   roerder:    !include aquarium-ble-bridge-roerder.yaml
   ventilator: !include aquarium-ble-bridge-ventilator.yaml
   doctor:     !include aquarium-ble-bridge-doctor.yaml
-  # wrgb2:    !include aquarium-ble-bridge-wrgb2.yaml    # tijdelijk uitgeschakeld
+  wrgb2:      !include aquarium-ble-bridge-wrgb2.yaml
+  co2:        !include aquarium-ble-bridge-co2.yaml
   # dosing:   !include aquarium-ble-bridge-dosing.yaml  # wacht op MAC + protocol sniffing
