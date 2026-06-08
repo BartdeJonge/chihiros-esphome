@@ -59,9 +59,13 @@ api:
   encryption:
     key: !secret encryption_key
   on_client_connected:
-    - lambda: id(co2_boot_klaar) = true;
-    - switch.turn_on: wrgb2_verbinding
-    - switch.turn_on: ventilator_verbinding
+    - if:
+        condition:
+          lambda: return !id(co2_boot_klaar);
+        then:
+          - lambda: id(co2_boot_klaar) = true;
+          - switch.turn_on: wrgb2_verbinding
+          - switch.turn_on: ventilator_verbinding
 
 ota:
   - platform: esphome
