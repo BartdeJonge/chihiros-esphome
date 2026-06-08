@@ -140,7 +140,7 @@ number:
     max_value: 200
     step: 1
     initial_value: 130
-    restore_value: true
+    restore_value: false
     icon: mdi:water-check
     unit_of_measurement: "ppm"
     optimistic: true
@@ -183,13 +183,17 @@ select:
       - "Vis (93 ppm)"
       - "Garnaal (66 ppm)"
       - "Manueel"
-    initial_option: "Plant (80 ppm)"
+    initial_option: "Manueel"
     on_value:
       then:
-        - lambda: |-
-            if (x == "Plant (80 ppm)")        id(num_doctor_tds).make_call().set_value(80).perform();
-            else if (x == "Vis (93 ppm)")     id(num_doctor_tds).make_call().set_value(93).perform();
-            else if (x == "Garnaal (66 ppm)") id(num_doctor_tds).make_call().set_value(66).perform();
+        - if:
+            condition:
+              lambda: return id(co2_boot_klaar);
+            then:
+              - lambda: |-
+                  if (x == "Plant (80 ppm)")        id(num_doctor_tds).make_call().set_value(80).perform();
+                  else if (x == "Vis (93 ppm)")     id(num_doctor_tds).make_call().set_value(93).perform();
+                  else if (x == "Garnaal (66 ppm)") id(num_doctor_tds).make_call().set_value(66).perform();
 
 sensor:
   - platform: ble_client

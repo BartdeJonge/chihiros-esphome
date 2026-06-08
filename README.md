@@ -12,8 +12,22 @@ This project replaces the app with an **ESP32-S3** — a small Wi-Fi + Bluetooth
 2. Connects to your home Wi-Fi network
 3. Exposes all controls to **Home Assistant** as regular entities (switches, sliders, buttons)
 
-```
-[Chihiros device] ←── Bluetooth ──→ [ESP32-S3] ←── Wi-Fi ──→ [Home Assistant]
+```mermaid
+graph LR
+    CO2["CO2 Controller"]
+    STI["Magnetic Stirrer"]
+    FAN["Cooling Fan"]
+    DOC["Doctor Mate"]
+    WRG["WRGB2 Light"]
+    ESP["ESP32-S3"]
+    HA["Home Assistant"]
+
+    CO2 <-->|BLE| ESP
+    STI <-->|BLE| ESP
+    FAN <-->|BLE| ESP
+    DOC <-->|BLE| ESP
+    WRG <-->|BLE| ESP
+    ESP <-->|Wi-Fi| HA
 ```
 
 ## Connection Architecture
@@ -21,6 +35,21 @@ This project replaces the app with an **ESP32-S3** — a small Wi-Fi + Bluetooth
 All connections are **non-persistent** — the ESP32 connects to a device, sends the necessary commands, then disconnects. This is by design.
 
 Most Chihiros devices store their configuration internally (CO2 schedules, WRGB2 light schedule, stirrer speed/timer). The ESP32 only needs to push a new schedule when something changes, not keep a permanent connection. Keeping multiple BLE connections open simultaneously competes for radio time, making every device slower to respond.
+
+```mermaid
+sequenceDiagram
+    participant HA as Home Assistant
+    participant ESP as ESP32-S3
+    participant Dev as Chihiros Device
+
+    HA->>ESP: API connect (boot)
+    ESP->>Dev: BLE connect
+    ESP->>Dev: AUTH + RTC
+    ESP->>Dev: Config (schedule / settings)
+    Dev-->>ESP: Notification (ack)
+    ESP->>Dev: BLE disconnect
+    Note over Dev: Runs autonomously on internal RTC
+```
 
 | Device | When it connects |
 |---|---|
@@ -31,9 +60,7 @@ Most Chihiros devices store their configuration internally (CO2 schedules, WRGB2
 | Cooling Fan | **Every 5 minutes** (for temperature readings) + when settings change |
 | Dosing Pump | Not yet implemented |
 
-The fan is the only exception: it connects periodically to read water temperature, room temperature, and humidity into Home Assistant. The fan itself controls speed autonomously based on the temperature thresholds you push to it — it doesn't need an active BLE connection to operate.
-
-**Benefit**: the BLE scanner is almost always free to discover devices quickly. Toggling a stirrer channel or pushing a new CO2 schedule typically completes within 2–4 seconds.
+**Benefit**: the BLE scanner is almost always free. Toggling a stirrer channel or pushing a new CO2 schedule typically completes within 2–4 seconds.
 
 ---
 
@@ -82,7 +109,7 @@ packages:
 
 ### Step 4 — Flash
 
-Flash the first time via USB using the ESPHome dashboard (Web Serial in Chrome/Edge). After that, OTA works fine — flash with:
+Flash the first time via USB using the ESPHome dashboard (Web Serial in Chrome/Edge). After that, OTA works fine:
 
 ```bash
 docker exec esphome esphome upload /config/aquarium-ble-bridge.yaml
@@ -206,29 +233,79 @@ Frame format:
 
 > Protocol verified via btsnoop HCI analysis (2026-05-30).
 
-**Connect → configure → disconnect.** On connect: `AUTH` → `RTC` × 2 → `RESET_SCHEMA` → time slots → disconnect.
+```mermaid
+sequenceDiagram
+    participant ESP as ESP32-S3
+    participant CO2 as CO2 Controller
+
+    ESP->>CO2: BLE connect
+    ESP->>CO2: AUTH
+    ESP->>CO2: RTC
+    ESP->>CO2: RTC (2nd)
+    ESP->>CO2: RESET_SCHEMA (clears all slots)
+    alt schema active
+        ESP->>CO2: SCHEMA slot → CO2_ON  at (fotoperiode_start − prestart)
+        ESP->>CO2: SCHEMA slot → CO2_OFF at fotoperiode_eind
+    else schema inactive
+        ESP->>CO2: SCHEMA slot → CO2_EMPTY
+        ESP->>CO2: SCHEMA slot → CO2_EMPTY
+    end
+    ESP->>CO2: BLE disconnect
+    Note over CO2: Opens/closes valve autonomously on internal RTC
+```
 
 `RESET_SCHEMA` clears all existing slots — no old values need to be tracked when times change.
-
-Deactivating: send `CO2_EMPTY` slots instead of `CO2_ON`/`CO2_OFF`.
 
 ---
 
 ## Magnetic Stirrer (4-channel)
 
-**Connect → configure → disconnect.** On connect: `AUTH` → `RTC` → config for all 4 channels → `STIR_APPLY` → restore on/off state → disconnect.
+```mermaid
+sequenceDiagram
+    participant ESP as ESP32-S3
+    participant STI as Stirrer
 
-Channel on/off state is stored in NVS globals (`restore_value: true`) so after an ESP reboot the stirrer returns to the last-known state.
+    ESP->>STI: BLE connect
+    ESP->>STI: AUTH
+    ESP->>STI: RTC
+    loop for each channel 0..3
+        ESP->>STI: STIR_ENABLE (channel)
+        ESP->>STI: STIR_SPEED  (channel, 0–127)
+        ESP->>STI: STIR_TIMER  (channel, duration, interval)
+    end
+    ESP->>STI: STIR_APPLY
+    ESP->>STI: STIR_RESTORE (on/off bitmask all 4 channels)
+    ESP->>STI: BLE disconnect
+    Note over STI: Runs timer cycles autonomously
+```
 
-Speed encoding: HA 0–100% → device 0–127.
+Channel on/off state is stored in NVS globals (`restore_value: true`) so after an ESP reboot the stirrer returns to the last-known state. Speed encoding: HA 0–100% → device 0–127.
 
 ---
 
 ## Cooling Fan
 
-**Periodic connect** (every 5 minutes). On connect: `AUTH` → `RTC` × 2 → `AUTH_EXT1` → `AUTH_EXT2` → silent mode → temperature threshold → manual speed → wait 2 s for notifications → disconnect.
+```mermaid
+sequenceDiagram
+    participant ESP as ESP32-S3
+    participant FAN as Cooling Fan
 
-The fan controls speed autonomously based on the temperature threshold. The 2-second wait after init is to receive the notification packet containing water temperature, room temperature, fan speed, and humidity.
+    loop Every 5 minutes
+        ESP->>FAN: BLE connect
+        ESP->>FAN: AUTH
+        ESP->>FAN: RTC
+        ESP->>FAN: RTC (2nd)
+        ESP->>FAN: AUTH_EXT1 (device-specific)
+        ESP->>FAN: AUTH_EXT2 (device-specific)
+        ESP->>FAN: SET_MODE (silent on/off)
+        ESP->>FAN: TEMP_THRESH (start °C, max °C)
+        ESP->>FAN: FAN_SPEED (0 = auto)
+        Note over ESP: Wait 2s for notification
+        FAN-->>ESP: Notification: fan%, room temp, water temp, humidity
+        ESP->>FAN: BLE disconnect
+    end
+    Note over FAN: Controls speed autonomously based on water temp
+```
 
 Notifications (`x[4] == 0x01`):
 
@@ -243,11 +320,23 @@ Notifications (`x[4] == 0x01`):
 
 ## Doctor Mate
 
-**Connect → configure → disconnect.** On connect: `AUTH` → `RTC` → `SETTINGS` (TDS) → `SETTINGS` (Volume) → disconnect.
+```mermaid
+sequenceDiagram
+    participant ESP as ESP32-S3
+    participant DOC as Doctor Mate
 
-TDS and Volume use identical frames — device distinguishes them **only by send order**. Always send both in this order.
+    ESP->>DOC: BLE connect
+    ESP->>DOC: AUTH (DEVICE header 0xa5)
+    ESP->>DOC: RTC
+    ESP->>DOC: SETTINGS pos1 → TDS (EC µS/cm)
+    ESP->>DOC: SETTINGS pos2 → Volume (liters × 2)
+    ESP->>DOC: BLE disconnect
+    Note over DOC: Doses automatically based on EC measurement
+```
 
-Encoding: TDS = EC (µS/cm) = ppm ÷ 0.4. Volume = liters × 2.
+TDS and Volume use **identical frames** — device distinguishes them **only by send order**. Always send both in this order.
+
+Encoding: EC (µS/cm) = ppm ÷ 0.4. Volume = liters × 2.
 
 ---
 
@@ -255,15 +344,35 @@ Encoding: TDS = EC (µS/cm) = ppm ÷ 0.4. Volume = liters × 2.
 
 > Protocol verified via btsnoop HCI analysis (2026-05-30).
 
-**Connect → configure → disconnect.** The lamp stores its schedule internally and runs autonomously. BLE is only needed to push a new schedule.
+```mermaid
+sequenceDiagram
+    participant ESP as ESP32-S3
+    participant WRG as WRGB2 Light
 
-On connect in auto mode: `AUTH` → `RTC` × 2 → `RESET_SCHEMA` → `SCHEDULE` → `RESET_AUTO` → final `RTC` (triggers schedule evaluation) → disconnect.
+    ESP->>WRG: BLE connect
+    ESP->>WRG: AUTH
+    ESP->>WRG: RTC
+    ESP->>WRG: RTC (2nd)
+    WRG-->>ESP: Notification (current state)
+    alt auto mode
+        ESP->>WRG: RESET_SCHEMA
+        ESP->>WRG: SCHEDULE (on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B)
+        ESP->>WRG: RESET_AUTO (switch to auto mode)
+        ESP->>WRG: RTC (triggers immediate schedule evaluation)
+    else manual mode
+        ESP->>WRG: BRIGHTNESS R
+        ESP->>WRG: BRIGHTNESS G
+        ESP->>WRG: BRIGHTNESS B
+    end
+    ESP->>WRG: BLE disconnect
+    Note over WRG: Follows schedule with fade — no BLE needed
+```
 
-Schedule `DEVICE SCHEDULE` data: `[on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B, 0xff×5]`
+Schedule data: `[on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B, 0xff×5]`
 
 - `ramp_min`: fade duration 0–150 min. **Value 90 is forbidden** (= 0x5a frame header) → use 89.
 - `weekdays`: bitmask Mon=64..Sun=1; 127 = every day.
-- `R/G/B = 0xff` = delete marker (deactivate).
+- `R/G/B = 0xff` = delete marker (deactivate schedule).
 
 ---
 
@@ -279,4 +388,4 @@ Connect + auth + notification logging is implemented. To reverse-engineer: flash
 
 - State persistence across reboots: use `globals` with `restore_value: true`. The lambda `return id(my_global)` reflects current state even after a crash/reboot.
 - `script.execute` with inline `{ }` parameter syntax is unreliable from `turn_on/turn_off_action`. Use inline `ble_client.ble_write` instead.
-- Secrets required: `wifi_ssid_iot`, `wifi_password_iot`, `encryption_key`, `ota_password`, `web_user`, `web_password`.
+- Secrets required: `wifi_sid`, `wifi_password_iot`, `encryption_key`, `ota_password`, `web_user`, `web_password`.
