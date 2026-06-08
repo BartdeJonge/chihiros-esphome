@@ -48,7 +48,7 @@ The fan is the only exception: it connects periodically to read water temperatur
 Create a `secrets.yaml` in the same folder:
 
 ```yaml
-wifi_ssid_iot: "YourWiFiNetwork"
+wifi_sid: "YourWiFiNetwork"
 wifi_password_iot: "YourWiFiPassword"
 encryption_key: ""        # generate one in ESPHome dashboard
 ota_password: "choose_a_password"
