@@ -256,6 +256,8 @@ sequenceDiagram
 
 `RESET_SCHEMA` clears all existing slots — no old values need to be tracked when times change.
 
+> **Note:** The CO2 valve physically actuates (audible click) on every connect. This is normal — the controller briefly opens and then closes the valve as it evaluates the new schedule against the current time. Avoid connecting more often than necessary.
+
 ---
 
 ## Magnetic Stirrer (4-channel)

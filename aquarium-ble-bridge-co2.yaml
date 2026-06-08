@@ -12,6 +12,9 @@ esp32_ble_tracker:
 # Activeren: RESET_SCHEMA → start→ON → end→OFF
 # Deactiveren: start→EMPTY → end→EMPTY
 #
+# LET OP: de CO2-klep klikt fysiek bij elke connect (RESET_SCHEMA triggert actuatie).
+# Verbind daarom alleen als het echt nodig is — niet periodiek pollen.
+#
 # RESET_SCHEMA wist alle slots in het apparaat — geen old-waarden nodig bij tijdwijziging.
 # RTC wordt twee keer gestuurd (conform app-gedrag).
 
