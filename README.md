@@ -140,6 +140,8 @@ This connect → configure → disconnect pattern is expected and correct.
 - **BLE connections**: up to 7 (`CONFIG_BT_ACL_CONNECTIONS: "7"`)
 - **BLE scan**: `interval: 320ms`, `window: 60ms`, continuous
 
+> **BLE 5.0 required.** The original ESP32 only supports BLE 4.2 and cannot handle multiple simultaneous BLE clients reliably. Use an **ESP32-S3** (or ESP32-C3/C6) which supports BLE 5.0. The S3 is recommended for its extra RAM, which is needed when running the BLE scanner alongside multiple client connections.
+
 ## Supported Devices
 
 | Device | Status |
