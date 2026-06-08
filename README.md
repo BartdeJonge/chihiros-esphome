@@ -76,19 +76,24 @@ Create a `secrets.yaml` in the same folder:
 
 ```yaml
 wifi_sid: "YourWiFiNetwork"
-wifi_password: "YourWiFiPassword"
+wifi_password_iot: "YourWiFiPassword"
 encryption_key: ""        # generate one in ESPHome dashboard
 ota_password: "choose_a_password"
 web_user: "admin"
 web_password: "choose_a_password"
 ```
 
-### Step 2 — Fill in your MAC addresses
+### Step 2 — Find your device MACs
 
-Open `aquarium-ble-bridge.yaml` and replace the placeholder MACs with your actual device MACs. You can find them via:
+Open `aquarium-ble-bridge.yaml` and replace the placeholder MACs with your actual device MACs.
+
+**Easiest method:** flash the firmware first (Steps 3–4), then open the ESPHome logs. Any Chihiros device within BLE range that is not yet in your config will be identified automatically — no separate BLE scanner needed. See [Auto-detection](#auto-detection) below for details.
+
+You can also find MACs via:
 - The Chihiros app → device settings → device info
 - A BLE scanner app (e.g. nRF Connect on Android/iOS)
-- The ESPHome logs: unknown Chihiros devices (`DY` prefix) are logged automatically
+
+> **One device per type.** This configuration assumes exactly one of each device type. If you have multiple WRGB2 lights, you would need to duplicate the package and rename all IDs.
 
 ### Step 3 — Enable the devices you want
 
@@ -385,6 +390,41 @@ Schedule data: `[on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B, 0xff×5]
 > **Skeleton only.** Protocol not yet reverse-engineered.
 
 Connect + auth + notification logging is implemented. To reverse-engineer: flash the skeleton, trigger a manual dose in the Chihiros app while watching ESPHome logs, identify the command bytes.
+
+---
+
+## Auto-detection
+
+Every Chihiros device advertises a BLE name in the format `DY{type}{MAC}` — the type prefix is encoded directly in the name. The firmware uses this to automatically identify any Chihiros device within range that is not yet in your configuration:
+
+```
+[I][ble_scan]: Chihiros gevonden: WRGB2 light         → gebruik als wrgb2_mac | MAC=CF:20:3B:6D:17:C1 RSSI=-62
+[I][ble_scan]: Chihiros gevonden: CO2 controller      → gebruik als co2_mac   | MAC=CC:A0:27:8E:79:E9 RSSI=-58
+[I][ble_scan]: Chihiros gevonden: Magnetic stirrer    → gebruik als roerder_mac | MAC=D3:A1:88:0F:7C:42 RSSI=-71
+```
+
+```mermaid
+sequenceDiagram
+    participant ESP as ESP32-S3 (scanning)
+    participant WRG as WRGB2 (not yet configured)
+
+    WRG-->>ESP: BLE advertise "DYNT90CF203B6D17C1"
+    Note over ESP: prefix DYNT90 → WRGB2 light<br/>MAC = CF:20:3B:6D:17:C1
+    ESP->>ESP: log "WRGB2 light → gebruik als wrgb2_mac | MAC=CF:20:3B:6D:17:C1"
+```
+
+Known prefixes:
+
+| BLE name prefix | Device type | Substitution variable |
+|---|---|---|
+| `DYNT90` | WRGB2 light | `wrgb2_mac` |
+| `DYPCO2` | CO2 controller | `co2_mac` |
+| `DYMIX` | Magnetic stirrer | `roerder_mac` |
+| `DYNFAN` | Cooling fan | `ventilator_mac` |
+| `DYNDOC` | Doctor Mate | `doctor_mac` |
+| `DYDOSE` | Dosing pump | `dosing_mac` |
+
+Devices already present in your substitutions are silently ignored — only unconfigured devices are logged. Once you have all MACs, fill them in and reflash.
 
 ---
 

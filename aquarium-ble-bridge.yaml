@@ -38,8 +38,8 @@ esp32:
       CONFIG_BT_ACL_CONNECTIONS: "7"
 
 wifi:
-  ssid: !secret wifi_ssid_iot
-  password: !secret wifi_password
+  ssid: !secret wifi_sid
+  password: !secret wifi_password_iot
   fast_connect: enable
 
 logger:
@@ -94,8 +94,16 @@ esp32_ble_tracker:
             if (mac == "${co2_mac}" || mac == "${roerder_mac}" ||
                 mac == "${ventilator_mac}" || mac == "${doctor_mac}" ||
                 mac == "${wrgb2_mac}" || mac == "${dosing_mac}") return;
-            ESP_LOGI("ble_scan", "Onbekend Chihiros device! MAC=%s naam='%s' RSSI=%d",
-              mac.c_str(), name.c_str(), x.get_rssi());
+            // Identificeer apparaattype uit naam-prefix (DY{type}{MAC_zonder_dubbele_punten})
+            const char* type = "Onbekend type";
+            if      (name.rfind("DYNT90", 0) == 0) type = "WRGB2 light         → gebruik als wrgb2_mac";
+            else if (name.rfind("DYPCO2", 0) == 0) type = "CO2 controller      → gebruik als co2_mac";
+            else if (name.rfind("DYMIX",  0) == 0) type = "Magnetic stirrer    → gebruik als roerder_mac";
+            else if (name.rfind("DYNFAN", 0) == 0) type = "Cooling fan         → gebruik als ventilator_mac";
+            else if (name.rfind("DYNDOC", 0) == 0) type = "Doctor Mate         → gebruik als doctor_mac";
+            else if (name.rfind("DYDOSE", 0) == 0) type = "Dosing pump         → gebruik als dosing_mac";
+            ESP_LOGI("ble_scan", "Chihiros gevonden: %s | MAC=%s RSSI=%d",
+              type, mac.c_str(), x.get_rssi());
 
 packages:
   schema:     !include aquarium-ble-bridge-schema.yaml
