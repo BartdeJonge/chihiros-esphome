@@ -200,6 +200,7 @@ sensor:
     id: co2_status_raw
     name: "CO2 Status"
     notify: true
+    internal: true
     unit_of_measurement: ""
     lambda: |-
       ESP_LOGI("co2", "Notificatie: %s", [&](){
