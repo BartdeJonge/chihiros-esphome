@@ -522,7 +522,7 @@ sequenceDiagram
     ESP->>DOP: BLE disconnect
 ```
 
-Supports 3 pumps (0-indexed). Volume in 0.1 mL units. Hour is split across two frames: `TIMER[2] = hour >> 1`, `SPEED[2] = hour & 1`.
+Supports 4 pumps (0-indexed). Volume in 0.1 mL units. Hour is split across two frames: `TIMER[2] = hour >> 1`, `SPEED[2] = hour & 1`.
 
 Weekdays bitmask: Mon=64 Tue=32 Wed=16 Thu=8 Fri=4 Sat=2 Sun=1 (same as WRGB2).
 
