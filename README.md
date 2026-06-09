@@ -77,8 +77,8 @@ sequenceDiagram
 Create a `secrets.yaml` in the same folder:
 
 ```yaml
-wifi_sid: "YourWiFiNetwork"
-wifi_password_iot: "YourWiFiPassword"
+wifi_ssid: "YourWiFiNetwork"
+wifi_password: "YourWiFiPassword"
 encryption_key: ""        # generate one in ESPHome dashboard
 ota_password: "choose_a_password"
 web_user: "admin"
@@ -600,4 +600,4 @@ Devices already present in your substitutions are silently ignored — only unco
 
 - State persistence across reboots: use `globals` with `restore_value: true`. The lambda `return id(my_global)` reflects current state even after a crash/reboot.
 - `script.execute` with inline `{ }` parameter syntax is unreliable from `turn_on/turn_off_action`. Use inline `ble_client.ble_write` instead.
-- Secrets required: `wifi_sid`, `wifi_password`, `encryption_key`, `ota_password`, `web_user`, `web_password`.
+- Secrets required: `wifi_ssid`, `wifi_password`, `encryption_key`, `ota_password`, `web_user`, `web_password`.
