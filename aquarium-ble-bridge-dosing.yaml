@@ -11,7 +11,7 @@
 # Disable:      STIR_ENABLE met enable=false (0x00)
 #
 # dosing_actieve_actie:
-#   0 = schema update (alle 3 pompen)
+#   0 = schema update (alle 4 pompen)
 #   1 = handmatige dosis (dosing_actieve_pomp)
 
 globals:
@@ -80,7 +80,7 @@ ble_client:
                   characteristic_uuid: ${ble_tx}
                   value: !lambda |-
                     int pump = id(dosing_actieve_pomp);
-                    float vol_arr[] = {id(num_dosing_vol_p1).state, id(num_dosing_vol_p2).state, id(num_dosing_vol_p3).state};
+                    float vol_arr[] = {id(num_dosing_vol_p1).state, id(num_dosing_vol_p2).state, id(num_dosing_vol_p3).state, id(num_dosing_vol_p4).state};
                     uint8_t vol_01ml = (uint8_t)(vol_arr[pump] * 10.0f + 0.5f);
                     ESP_LOGI("dosing", "Dose pomp %d: %.1f mL (0x%02x)", pump+1, vol_arr[pump], vol_01ml);
                     return chihiros::dose_pump((uint8_t)pump, vol_01ml, id(cmd_seq_dosing)++);
@@ -115,7 +115,8 @@ script:
           value: !lambda |-
             bool en = pump == 0 ? id(sw_dosing_schema_p1).state :
                       pump == 1 ? id(sw_dosing_schema_p2).state :
-                                  id(sw_dosing_schema_p3).state;
+                      pump == 2 ? id(sw_dosing_schema_p3).state :
+                                  id(sw_dosing_schema_p4).state;
             ESP_LOGI("dosing", "Schema p%d enable=%d", pump+1, en);
             return chihiros::dose_schedule_enable((uint8_t)pump, en, id(cmd_seq_dosing)++);
       - delay: 150ms
@@ -124,10 +125,10 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            float vol_arr[] = {id(num_dosing_vol_p1).state, id(num_dosing_vol_p2).state, id(num_dosing_vol_p3).state};
-            uint8_t wk_arr[] = {(uint8_t)id(num_dosing_weekdays_p1).state, (uint8_t)id(num_dosing_weekdays_p2).state, (uint8_t)id(num_dosing_weekdays_p3).state};
-            uint8_t h_arr[]  = {(uint8_t)id(num_dosing_hour_p1).state, (uint8_t)id(num_dosing_hour_p2).state, (uint8_t)id(num_dosing_hour_p3).state};
-            uint8_t m_arr[]  = {(uint8_t)id(num_dosing_min_p1).state, (uint8_t)id(num_dosing_min_p2).state, (uint8_t)id(num_dosing_min_p3).state};
+            float vol_arr[] = {id(num_dosing_vol_p1).state, id(num_dosing_vol_p2).state, id(num_dosing_vol_p3).state, id(num_dosing_vol_p4).state};
+            uint8_t wk_arr[] = {(uint8_t)id(num_dosing_weekdays_p1).state, (uint8_t)id(num_dosing_weekdays_p2).state, (uint8_t)id(num_dosing_weekdays_p3).state, (uint8_t)id(num_dosing_weekdays_p4).state};
+            uint8_t h_arr[]  = {(uint8_t)id(num_dosing_hour_p1).state, (uint8_t)id(num_dosing_hour_p2).state, (uint8_t)id(num_dosing_hour_p3).state, (uint8_t)id(num_dosing_hour_p4).state};
+            uint8_t m_arr[]  = {(uint8_t)id(num_dosing_min_p1).state, (uint8_t)id(num_dosing_min_p2).state, (uint8_t)id(num_dosing_min_p3).state, (uint8_t)id(num_dosing_min_p4).state};
             uint8_t vol = (uint8_t)(vol_arr[pump] * 10.0f + 0.5f);
             ESP_LOGI("dosing", "Schema p%d wk=0x%02x %02d:%02d %.1fmL", pump+1, wk_arr[pump], h_arr[pump], m_arr[pump], vol_arr[pump]);
             return chihiros::dose_schedule_speed((uint8_t)pump, wk_arr[pump], h_arr[pump], m_arr[pump], vol, id(cmd_seq_dosing)++);
@@ -137,7 +138,7 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t h_arr[] = {(uint8_t)id(num_dosing_hour_p1).state, (uint8_t)id(num_dosing_hour_p2).state, (uint8_t)id(num_dosing_hour_p3).state};
+            uint8_t h_arr[] = {(uint8_t)id(num_dosing_hour_p1).state, (uint8_t)id(num_dosing_hour_p2).state, (uint8_t)id(num_dosing_hour_p3).state, (uint8_t)id(num_dosing_hour_p4).state};
             return chihiros::dose_schedule_timer((uint8_t)pump, h_arr[pump], id(cmd_seq_dosing)++);
       - delay: 150ms
 
@@ -154,6 +155,10 @@ script:
       - script.execute:
           id: stuur_pomp_schema
           pump: 2
+      - script.wait: stuur_pomp_schema
+      - script.execute:
+          id: stuur_pomp_schema
+          pump: 3
       - script.wait: stuur_pomp_schema
       - logger.log: "dosing: schema verstuurd"
 
@@ -215,6 +220,23 @@ switch:
           value: '0'
       - script.execute: dosing_verbind_als_klaar
 
+  - platform: template
+    name: "Dosing schema pomp 4"
+    id: sw_dosing_schema_p4
+    icon: mdi:calendar-clock
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    on_turn_on:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+    on_turn_off:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
 button:
   - platform: template
     name: "Dosing pomp 1"
@@ -253,6 +275,19 @@ button:
       - globals.set:
           id: dosing_actieve_pomp
           value: '2'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing pomp 4"
+    id: btn_dosing_p4
+    icon: mdi:eyedropper
+    on_press:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '1'
+      - globals.set:
+          id: dosing_actieve_pomp
+          value: '3'
       - script.execute: dosing_verbind_als_klaar
 
 number:
@@ -294,6 +329,23 @@ number:
   - platform: template
     name: "Dosing pomp 3 volume"
     id: num_dosing_vol_p3
+    min_value: 0.1
+    max_value: 25.5
+    step: 0.1
+    initial_value: 1.0
+    restore_value: true
+    unit_of_measurement: "mL"
+    optimistic: true
+    icon: mdi:water
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing pomp 4 volume"
+    id: num_dosing_vol_p4
     min_value: 0.1
     max_value: 25.5
     step: 0.1
@@ -360,6 +412,23 @@ number:
           value: '0'
       - script.execute: dosing_verbind_als_klaar
 
+  - platform: template
+    name: "Dosing schema pomp 4 uur"
+    id: num_dosing_hour_p4
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 9
+    restore_value: true
+    unit_of_measurement: "u"
+    optimistic: true
+    icon: mdi:clock-outline
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
   # Minuten schema per pomp
   - platform: template
     name: "Dosing schema pomp 1 min"
@@ -412,6 +481,23 @@ number:
           value: '0'
       - script.execute: dosing_verbind_als_klaar
 
+  - platform: template
+    name: "Dosing schema pomp 4 min"
+    id: num_dosing_min_p4
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    unit_of_measurement: "min"
+    optimistic: true
+    icon: mdi:clock-outline
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
   # Weekdays bitmask per pomp (Ma=64 Di=32 Wo=16 Do=8 Vr=4 Za=2 Zo=1)
   - platform: template
     name: "Dosing schema pomp 1 weekdays"
@@ -448,6 +534,22 @@ number:
   - platform: template
     name: "Dosing schema pomp 3 weekdays"
     id: num_dosing_weekdays_p3
+    min_value: 0
+    max_value: 127
+    step: 1
+    initial_value: 127
+    restore_value: true
+    optimistic: true
+    icon: mdi:calendar-week
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 4 weekdays"
+    id: num_dosing_weekdays_p4
     min_value: 0
     max_value: 127
     step: 1
