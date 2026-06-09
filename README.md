@@ -309,10 +309,18 @@ sequenceDiagram
     Note over STI: Runs timer cycles autonomously
 ```
 
-Channel on/off state is stored in NVS globals (`restore_value: true`) so after an ESP reboot the stirrer returns to the last-known state. Speed encoding: HA 0–100% → device 0–127.
+Channel on/off state is stored in NVS globals (`restore_value: true`) so after an ESP reboot the stirrer returns to the last-known state.
+
+**Parameter ranges (matching Chihiros app):**
+
+| Parameter | App label | Range | Unit | Device encoding |
+|---|---|---|---|---|
+| Speed | Snelheid | 0–20 | — | `speed * 127 / 20` → 0–127 |
+| Duration | Duur | 1–120 | seconds | raw byte |
+| Lead time | Voorlooptijd | 1–240 | seconds | raw byte |
 
 <details>
-<summary>Wire examples — connect (ch0 60% speed, 5 min on / 30 min interval) + real-time toggle</summary>
+<summary>Wire examples — connect (ch0 speed=12/20, 13s on / 30s lead time) + real-time toggle</summary>
 
 ```
 Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
@@ -321,8 +329,8 @@ Connect sequence:
 1. auth             5a 01 06 00 01 04 01 03
 2. rtc              5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
 3. stir_enable ch0  a5 01 08 00 03 20 00 00 01 2b
-4. stir_speed  ch0  a5 01 0b 00 04 1b 00 4c 01 00 00 00 58   speed=76/127 (≈60%)
-5. stir_timer  ch0  a5 01 0b 00 05 15 00 00 05 1e 00 00 01   5 min on, 30 min interval
+4. stir_speed  ch0  a5 01 0b 00 04 1b 00 4c 01 00 00 00 58   speed=76/127 (≈12/20)
+5. stir_timer  ch0  a5 01 0b 00 05 15 00 00 0d 1e 00 00 01   13s on, 30s lead time
 6. stir_apply       a5 01 06 00 06 1f 00 1e
 7. stir_restore     a5 01 0f 00 07 14 ff ff 01 01 01 01 ff ff ff ff 1d   all 4 channels on
 

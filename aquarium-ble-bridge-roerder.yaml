@@ -126,7 +126,8 @@ script:
           value: !lambda |-
             float spd[] = {id(roerder_k0_snelheid).state, id(roerder_k1_snelheid).state,
                            id(roerder_k2_snelheid).state, id(roerder_k3_snelheid).state};
-            return chihiros::stir_speed_pct((uint8_t)kanaal, spd[kanaal], id(cmd_seq_roerder)++);
+            // App schaal 0-20 → device schaal 0-127
+            return chihiros::stir_speed((uint8_t)kanaal, (uint8_t)(spd[kanaal] * 127.0f / 20.0f), id(cmd_seq_roerder)++);
       - delay: 100ms
       # Timer: duur (minuten aan) en interval (minuten tussen cycli)
       - ble_client.ble_write:
@@ -281,142 +282,138 @@ number:
     id: roerder_k0_snelheid
     name: "Roerder kanaal 0 snelheid"
     min_value: 0
-    max_value: 100
+    max_value: 20
     step: 1
-    initial_value: 100
+    initial_value: 20
     restore_value: true
     optimistic: true
-    unit_of_measurement: "%"
     icon: mdi:speedometer
 
   - platform: template
     id: roerder_k0_duur
     name: "Roerder kanaal 0 duur"
     min_value: 1
-    max_value: 60
+    max_value: 120
     step: 1
     initial_value: 13
     restore_value: true
     optimistic: true
-    unit_of_measurement: "min"
+    unit_of_measurement: "s"
     icon: mdi:timer
 
   - platform: template
     id: roerder_k0_interval
-    name: "Roerder kanaal 0 interval"
+    name: "Roerder kanaal 0 voorlooptijd"
     min_value: 1
     max_value: 240
     step: 1
     initial_value: 30
     restore_value: true
     optimistic: true
-    unit_of_measurement: "min"
+    unit_of_measurement: "s"
     icon: mdi:timer-outline
 
   - platform: template
     id: roerder_k1_snelheid
     name: "Roerder kanaal 1 snelheid"
     min_value: 0
-    max_value: 100
+    max_value: 20
     step: 1
-    initial_value: 100
+    initial_value: 20
     restore_value: true
     optimistic: true
-    unit_of_measurement: "%"
     icon: mdi:speedometer
 
   - platform: template
     id: roerder_k1_duur
     name: "Roerder kanaal 1 duur"
     min_value: 1
-    max_value: 60
+    max_value: 120
     step: 1
     initial_value: 13
     restore_value: true
     optimistic: true
-    unit_of_measurement: "min"
+    unit_of_measurement: "s"
     icon: mdi:timer
 
   - platform: template
     id: roerder_k1_interval
-    name: "Roerder kanaal 1 interval"
+    name: "Roerder kanaal 1 voorlooptijd"
     min_value: 1
     max_value: 240
     step: 1
     initial_value: 50
     restore_value: true
     optimistic: true
-    unit_of_measurement: "min"
+    unit_of_measurement: "s"
     icon: mdi:timer-outline
 
   - platform: template
     id: roerder_k2_snelheid
     name: "Roerder kanaal 2 snelheid"
     min_value: 0
-    max_value: 100
+    max_value: 20
     step: 1
-    initial_value: 100
+    initial_value: 20
     restore_value: true
     optimistic: true
-    unit_of_measurement: "%"
     icon: mdi:speedometer
 
   - platform: template
     id: roerder_k2_duur
     name: "Roerder kanaal 2 duur"
     min_value: 1
-    max_value: 60
+    max_value: 120
     step: 1
     initial_value: 13
     restore_value: true
     optimistic: true
-    unit_of_measurement: "min"
+    unit_of_measurement: "s"
     icon: mdi:timer
 
   - platform: template
     id: roerder_k2_interval
-    name: "Roerder kanaal 2 interval"
+    name: "Roerder kanaal 2 voorlooptijd"
     min_value: 1
     max_value: 240
     step: 1
     initial_value: 30
     restore_value: true
     optimistic: true
-    unit_of_measurement: "min"
+    unit_of_measurement: "s"
     icon: mdi:timer-outline
 
   - platform: template
     id: roerder_k3_snelheid
     name: "Roerder kanaal 3 snelheid"
     min_value: 0
-    max_value: 100
+    max_value: 20
     step: 1
-    initial_value: 100
+    initial_value: 20
     restore_value: true
     optimistic: true
-    unit_of_measurement: "%"
     icon: mdi:speedometer
 
   - platform: template
     id: roerder_k3_duur
     name: "Roerder kanaal 3 duur"
     min_value: 1
-    max_value: 60
+    max_value: 120
     step: 1
     initial_value: 13
     restore_value: true
     optimistic: true
-    unit_of_measurement: "min"
+    unit_of_measurement: "s"
     icon: mdi:timer
 
   - platform: template
     id: roerder_k3_interval
-    name: "Roerder kanaal 3 interval"
+    name: "Roerder kanaal 3 voorlooptijd"
     min_value: 1
     max_value: 240
     step: 1
     initial_value: 35
     restore_value: true
     optimistic: true
-    unit_of_measurement: "min"
+    unit_of_measurement: "s"
     icon: mdi:timer-outline
