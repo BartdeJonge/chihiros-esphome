@@ -19,6 +19,7 @@ graph LR
     FAN["Cooling Fan"]
     DOC["Doctor Mate"]
     WRG["WRGB2 Light"]
+    DOP["Dosing Pump"]
     ESP["ESP32-S3"]
     HA["Home Assistant"]
 
@@ -27,6 +28,7 @@ graph LR
     FAN <-->|BLE| ESP
     DOC <-->|BLE| ESP
     WRG <-->|BLE| ESP
+    DOP <-->|BLE| ESP
     ESP <-->|Wi-Fi| HA
 ```
 
