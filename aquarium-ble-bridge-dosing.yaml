@@ -1,23 +1,32 @@
-# --- CHIHIROS DOSING PUMP ---
+# --- DOSING PUMP ---
 #
-# STATUS: skeleton — verbinding + logging werkend, dosis-commando's nog onbekend.
+# Protocol afgeleid uit btsnoop HCI logs (2026-06-08):
 #
-# TODO na BLE-sniffing met de Chihiros app:
-#   - CMD_DOSE_MANUAL : handmatige dosis starten
-#   - CMD_DOSE_CONFIG : dosis-volume instellen (mL, encoding onbekend)
-#   - CMD_DOSE_SCHED  : schema (tijd, weekdagen, volume)
-#   - Notificatie bytes ontcijferen (status, volume, fout?)
+# Connect:      auth(BASE,0x01) → RTC → RTC → auth_dose1(DEVICE,0x04) → auth_dose2(DEVICE,0x05)
+# Schema:       STIR_ENABLE + STIR_SPEED + STIR_TIMER per pomp (zie helpers in chihiros_ble.h)
+# Handmatig:    STIR_SPEED [pump_idx, 0x00, 0x00, 0x00, vol_01ml]
 #
-# Aannames op basis van Doctor Mate (zelfde protocol-familie):
-#   - Auth: hdr::DEVICE, cmd::AUTH, {data::AUTH_BASE}
-#   - RTC: zelfde patroon
-#   - Frame format: identiek
+# Tijdcodering: uur gesplitst over STIR_TIMER[2]=uur>>1 en STIR_SPEED[2]=uur&1 (alle uren 0-23)
+# Weekdays:     zelfde bitmask als WRGB2 — Ma=64 Di=32 Wo=16 Do=8 Vr=4 Za=2 Zo=1
+# Disable:      STIR_ENABLE met enable=false (0x00)
+#
+# dosing_actieve_actie:
+#   0 = schema update (alle 3 pompen)
+#   1 = handmatige dosis (dosing_actieve_pomp)
 
 globals:
   - id: cmd_seq_dosing
     type: uint8_t
     restore_value: false
     initial_value: '1'
+  - id: dosing_actieve_actie
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: dosing_actieve_pomp
+    type: int
+    restore_value: false
+    initial_value: '0'
 
 ble_client:
   - mac_address: ${dosing_mac}
@@ -25,29 +34,128 @@ ble_client:
     on_connect:
       then:
         - delay: 500ms
-        # Stap 1: auth (zelfde als Doctor Mate — aanname, bevestig via logs)
+        - logger.log: "dosing: auth"
         - ble_client.ble_write:
             id: chihiros_dosing
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              ESP_LOGI("dosing", "Auth");
-              return chihiros::auth_device(id(cmd_seq_dosing)++);
+            value: !lambda return chihiros::auth(id(cmd_seq_dosing)++);
         - delay: 200ms
-        # Stap 2: RTC sync
+        - logger.log: "dosing: RTC 1"
         - ble_client.ble_write:
             id: chihiros_dosing
             service_uuid: ${ble_service}
             characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              auto t = id(ha_time).now();
-              ESP_LOGI("dosing", "RTC");
-              return chihiros::rtc_pakket(t, id(cmd_seq_dosing)++);
-        # TODO: stap 3 — instellingen sturen als de commando's bekend zijn
-        - logger.log: "Dosing pump verbonden — check logs voor notificatie bytes"
+            value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_dosing)++);
+        - delay: 200ms
+        - logger.log: "dosing: RTC 2"
+        - ble_client.ble_write:
+            id: chihiros_dosing
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_dosing)++);
+        - delay: 200ms
+        - logger.log: "dosing: auth_dose1"
+        - ble_client.ble_write:
+            id: chihiros_dosing
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth_dose1(id(cmd_seq_dosing)++);
+        - delay: 200ms
+        - logger.log: "dosing: auth_dose2"
+        - ble_client.ble_write:
+            id: chihiros_dosing
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth_dose2(id(cmd_seq_dosing)++);
+        - delay: 200ms
+        - if:
+            condition:
+              lambda: return id(dosing_actieve_actie) == 1;
+            then:
+              # Handmatige dosis
+              - ble_client.ble_write:
+                  id: chihiros_dosing
+                  service_uuid: ${ble_service}
+                  characteristic_uuid: ${ble_tx}
+                  value: !lambda |-
+                    int pump = id(dosing_actieve_pomp);
+                    float vol_arr[] = {id(num_dosing_vol_p1).state, id(num_dosing_vol_p2).state, id(num_dosing_vol_p3).state};
+                    uint8_t vol_01ml = (uint8_t)(vol_arr[pump] * 10.0f + 0.5f);
+                    ESP_LOGI("dosing", "Dose pomp %d: %.1f mL (0x%02x)", pump+1, vol_arr[pump], vol_01ml);
+                    return chihiros::dose_pump((uint8_t)pump, vol_01ml, id(cmd_seq_dosing)++);
+              - delay: 200ms
+            else:
+              # Schema update — stuur alle 3 pompen
+              - script.execute: stuur_dosing_schema
+              - script.wait: stuur_dosing_schema
+        - switch.turn_off: dosing_verbinding
     on_disconnect:
       then:
-        - logger.log: "Dosing pump verbinding verbroken"
+        - logger.log: "dosing: verbinding verbroken"
+
+script:
+  - id: dosing_verbind_als_klaar
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - switch.turn_on: dosing_verbinding
+
+  # Stuurt schema voor één pomp (3 writes: enable, speed/time, timer)
+  - id: stuur_pomp_schema
+    parameters:
+      pump: int
+    then:
+      - ble_client.ble_write:
+          id: chihiros_dosing
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            bool en = pump == 0 ? id(sw_dosing_schema_p1).state :
+                      pump == 1 ? id(sw_dosing_schema_p2).state :
+                                  id(sw_dosing_schema_p3).state;
+            ESP_LOGI("dosing", "Schema p%d enable=%d", pump+1, en);
+            return chihiros::dose_schedule_enable((uint8_t)pump, en, id(cmd_seq_dosing)++);
+      - delay: 150ms
+      - ble_client.ble_write:
+          id: chihiros_dosing
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            float vol_arr[] = {id(num_dosing_vol_p1).state, id(num_dosing_vol_p2).state, id(num_dosing_vol_p3).state};
+            uint8_t wk_arr[] = {(uint8_t)id(num_dosing_weekdays_p1).state, (uint8_t)id(num_dosing_weekdays_p2).state, (uint8_t)id(num_dosing_weekdays_p3).state};
+            uint8_t h_arr[]  = {(uint8_t)id(num_dosing_hour_p1).state, (uint8_t)id(num_dosing_hour_p2).state, (uint8_t)id(num_dosing_hour_p3).state};
+            uint8_t m_arr[]  = {(uint8_t)id(num_dosing_min_p1).state, (uint8_t)id(num_dosing_min_p2).state, (uint8_t)id(num_dosing_min_p3).state};
+            uint8_t vol = (uint8_t)(vol_arr[pump] * 10.0f + 0.5f);
+            ESP_LOGI("dosing", "Schema p%d wk=0x%02x %02d:%02d %.1fmL", pump+1, wk_arr[pump], h_arr[pump], m_arr[pump], vol_arr[pump]);
+            return chihiros::dose_schedule_speed((uint8_t)pump, wk_arr[pump], h_arr[pump], m_arr[pump], vol, id(cmd_seq_dosing)++);
+      - delay: 150ms
+      - ble_client.ble_write:
+          id: chihiros_dosing
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t h_arr[] = {(uint8_t)id(num_dosing_hour_p1).state, (uint8_t)id(num_dosing_hour_p2).state, (uint8_t)id(num_dosing_hour_p3).state};
+            return chihiros::dose_schedule_timer((uint8_t)pump, h_arr[pump], id(cmd_seq_dosing)++);
+      - delay: 150ms
+
+  - id: stuur_dosing_schema
+    then:
+      - script.execute:
+          id: stuur_pomp_schema
+          pump: 0
+      - script.wait: stuur_pomp_schema
+      - script.execute:
+          id: stuur_pomp_schema
+          pump: 1
+      - script.wait: stuur_pomp_schema
+      - script.execute:
+          id: stuur_pomp_schema
+          pump: 2
+      - script.wait: stuur_pomp_schema
+      - logger.log: "dosing: schema verstuurd"
 
 switch:
   - platform: ble_client
@@ -56,32 +164,304 @@ switch:
     internal: true
     restore_mode: RESTORE_DEFAULT_OFF
 
-button:
-  # TODO: invullen zodra CMD_DOSE_MANUAL bekend is
   - platform: template
-    name: "Dosing handmatige dosis"
-    id: btn_dosing_manual
+    name: "Dosing schema pomp 1"
+    id: sw_dosing_schema_p1
+    icon: mdi:calendar-clock
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    on_turn_on:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+    on_turn_off:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 2"
+    id: sw_dosing_schema_p2
+    icon: mdi:calendar-clock
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    on_turn_on:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+    on_turn_off:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 3"
+    id: sw_dosing_schema_p3
+    icon: mdi:calendar-clock
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    on_turn_on:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+    on_turn_off:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+button:
+  - platform: template
+    name: "Dosing pomp 1"
+    id: btn_dosing_p1
     icon: mdi:eyedropper
     on_press:
-      - if:
-          condition:
-            switch.is_on: dosing_verbinding
-          then:
-            - logger.log: "TODO: handmatige dosis — commando nog onbekend"
-            # - ble_client.ble_write:
-            #     id: chihiros_dosing
-            #     service_uuid: ${ble_service}
-            #     characteristic_uuid: ${ble_tx}
-            #     value: !lambda |-
-            #       return chihiros::pakket(chihiros::hdr::DEVICE, CMD_DOSE_MANUAL,
-            #         {volume_byte}, id(cmd_seq_dosing)++);
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '1'
+      - globals.set:
+          id: dosing_actieve_pomp
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing pomp 2"
+    id: btn_dosing_p2
+    icon: mdi:eyedropper
+    on_press:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '1'
+      - globals.set:
+          id: dosing_actieve_pomp
+          value: '1'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing pomp 3"
+    id: btn_dosing_p3
+    icon: mdi:eyedropper
+    on_press:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '1'
+      - globals.set:
+          id: dosing_actieve_pomp
+          value: '2'
+      - script.execute: dosing_verbind_als_klaar
+
+number:
+  # Volume per pomp (handmatig dosis + schema)
+  - platform: template
+    name: "Dosing pomp 1 volume"
+    id: num_dosing_vol_p1
+    min_value: 0.1
+    max_value: 25.5
+    step: 0.1
+    initial_value: 1.0
+    restore_value: true
+    unit_of_measurement: "mL"
+    optimistic: true
+    icon: mdi:water
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing pomp 2 volume"
+    id: num_dosing_vol_p2
+    min_value: 0.1
+    max_value: 25.5
+    step: 0.1
+    initial_value: 10.0
+    restore_value: true
+    unit_of_measurement: "mL"
+    optimistic: true
+    icon: mdi:water
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing pomp 3 volume"
+    id: num_dosing_vol_p3
+    min_value: 0.1
+    max_value: 25.5
+    step: 0.1
+    initial_value: 1.0
+    restore_value: true
+    unit_of_measurement: "mL"
+    optimistic: true
+    icon: mdi:water
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  # Tijdstip schema per pomp
+  - platform: template
+    name: "Dosing schema pomp 1 uur"
+    id: num_dosing_hour_p1
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 9
+    restore_value: true
+    unit_of_measurement: "u"
+    optimistic: true
+    icon: mdi:clock-outline
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 2 uur"
+    id: num_dosing_hour_p2
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 17
+    restore_value: true
+    unit_of_measurement: "u"
+    optimistic: true
+    icon: mdi:clock-outline
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 3 uur"
+    id: num_dosing_hour_p3
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 9
+    restore_value: true
+    unit_of_measurement: "u"
+    optimistic: true
+    icon: mdi:clock-outline
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  # Minuten schema per pomp
+  - platform: template
+    name: "Dosing schema pomp 1 min"
+    id: num_dosing_min_p1
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    unit_of_measurement: "min"
+    optimistic: true
+    icon: mdi:clock-outline
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 2 min"
+    id: num_dosing_min_p2
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    unit_of_measurement: "min"
+    optimistic: true
+    icon: mdi:clock-outline
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 3 min"
+    id: num_dosing_min_p3
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    unit_of_measurement: "min"
+    optimistic: true
+    icon: mdi:clock-outline
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  # Weekdays bitmask per pomp (Ma=64 Di=32 Wo=16 Do=8 Vr=4 Za=2 Zo=1)
+  - platform: template
+    name: "Dosing schema pomp 1 weekdays"
+    id: num_dosing_weekdays_p1
+    min_value: 0
+    max_value: 127
+    step: 1
+    initial_value: 127
+    restore_value: true
+    optimistic: true
+    icon: mdi:calendar-week
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 2 weekdays"
+    id: num_dosing_weekdays_p2
+    min_value: 0
+    max_value: 127
+    step: 1
+    initial_value: 88
+    restore_value: true
+    optimistic: true
+    icon: mdi:calendar-week
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
+
+  - platform: template
+    name: "Dosing schema pomp 3 weekdays"
+    id: num_dosing_weekdays_p3
+    min_value: 0
+    max_value: 127
+    step: 1
+    initial_value: 127
+    restore_value: true
+    optimistic: true
+    icon: mdi:calendar-week
+    on_value:
+      - globals.set:
+          id: dosing_actieve_actie
+          value: '0'
+      - script.execute: dosing_verbind_als_klaar
 
 sensor:
-  # Logt alle notificaties — gebruik dit na eerste connect om het protocol te ontcijferen.
-  # Kijk naar:
-  #   - Welke bytes veranderen bij een handmatige dosis
-  #   - Welke bytes de status / foutcode bevatten
-  #   - Welke bytes het ingestelde volume bevatten
   - platform: ble_client
     type: characteristic
     ble_client_id: chihiros_dosing
@@ -93,6 +473,5 @@ sensor:
     internal: true
     unit_of_measurement: ""
     lambda: |-
-      ESP_LOGI("dosing", "Notificatie (%d bytes):", x.size());
-      for (int i = 0; i < (int)x.size(); i++) ESP_LOGI("dosing", "  [%d] = 0x%02x (%d)", i, x[i], x[i]);
+      ESP_LOGI("dosing", "Notificatie (%d bytes): %s", (int)x.size(), chihiros::hex_dump(x).c_str());
       return NAN;

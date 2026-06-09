@@ -106,11 +106,19 @@ interval:
     then:
       - if:
           condition:
-            lambda: return id(co2_boot_klaar) && strcmp("${ventilator_mac}", "00:00:00:00:00:00") != 0;
+            lambda: return id(ha_verbonden) && strcmp("${ventilator_mac}", "00:00:00:00:00:00") != 0;
           then:
             - switch.turn_on: ventilator_verbinding
 
 script:
+  - id: ventilator_verbind_als_klaar
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - switch.turn_on: ventilator_verbinding
+
   - id: stuur_ventilator_drempel
     then:
       - logger.log:
@@ -135,19 +143,15 @@ switch:
     icon: mdi:volume-off
     lambda: return id(ventilator_silent_mode);
     turn_on_action:
-      - lambda: id(ventilator_silent_mode) = true;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: ventilator_verbinding
+      - globals.set:
+          id: ventilator_silent_mode
+          value: 'true'
+      - script.execute: ventilator_verbind_als_klaar
     turn_off_action:
-      - lambda: id(ventilator_silent_mode) = false;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: ventilator_verbinding
+      - globals.set:
+          id: ventilator_silent_mode
+          value: 'false'
+      - script.execute: ventilator_verbind_als_klaar
 
 button:
   - platform: template
@@ -155,11 +159,7 @@ button:
     id: btn_ventilator_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: ventilator_verbinding
+      - script.execute: ventilator_verbind_als_klaar
 
 number:
   - platform: template
@@ -174,12 +174,7 @@ number:
     unit_of_measurement: "°C"
     optimistic: true
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar);
-            then:
-              - switch.turn_on: ventilator_verbinding
+      - script.execute: ventilator_verbind_als_klaar
 
   - platform: template
     name: "Ventilator maximale koeling"
@@ -193,12 +188,7 @@ number:
     unit_of_measurement: "°C"
     optimistic: true
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar);
-            then:
-              - switch.turn_on: ventilator_verbinding
+      - script.execute: ventilator_verbind_als_klaar
 
   - platform: template
     name: "Ventilator handmatige snelheid"
@@ -212,12 +202,7 @@ number:
     unit_of_measurement: ""
     optimistic: true
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar);
-            then:
-              - switch.turn_on: ventilator_verbinding
+      - script.execute: ventilator_verbind_als_klaar
 
 sensor:
   - platform: ble_client
@@ -231,13 +216,12 @@ sensor:
     internal: true
     unit_of_measurement: ""
     lambda: |-
-      if (x.size() >= 13 && x[4] == 0x01) {
-        id(sensor_ventilator_fan_speed).publish_state((float)x[5]);
-        float kamer = ((x[6] << 8) | x[7]) / 256.0f;
-        if (kamer > 0.0f && kamer < 50.0f) id(sensor_ventilator_kamer_temp).publish_state(kamer);
-        float water = x[11] / 10.0f;
-        if (water > 0.0f && water < 50.0f) id(sensor_ventilator_water_temp).publish_state(water);
-        id(sensor_ventilator_humidity).publish_state((float)x[12]);
+      auto d = chihiros::parse_ventilator_notificatie(x);
+      if (d.valid) {
+        id(sensor_ventilator_fan_speed).publish_state(d.fan_speed);
+        if (d.kamer_temp > 0.0f && d.kamer_temp < 50.0f) id(sensor_ventilator_kamer_temp).publish_state(d.kamer_temp);
+        if (d.water_temp > 0.0f && d.water_temp < 50.0f) id(sensor_ventilator_water_temp).publish_state(d.water_temp);
+        id(sensor_ventilator_humidity).publish_state(d.humidity);
       }
       return NAN;
 

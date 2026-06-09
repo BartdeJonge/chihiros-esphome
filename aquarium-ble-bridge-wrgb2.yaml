@@ -38,7 +38,7 @@ ble_client:
         - delay: 500ms
         - if:
             condition:
-              lambda: return !id(co2_boot_klaar);
+              lambda: return !id(ha_verbonden);
             then:
               - logger.log: "wrgb2: HA nog niet verbonden, verbinding verbroken"
               - switch.turn_off: wrgb2_verbinding
@@ -66,7 +66,7 @@ ble_client:
                         characteristic_uuid: ${ble_tx}
                         value: !lambda |-
                           auto pkt = chihiros::rtc_pakket(id(ha_time).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
-                          ESP_LOGI("wrgb2", "RTC bytes: %s", [&](){ std::string s; for (auto b : pkt) { char buf[4]; snprintf(buf,sizeof(buf),"%02x ",b); s+=buf; } return s; }().c_str());
+                          ESP_LOGI("wrgb2", "RTC bytes: %s", chihiros::hex_dump(pkt).c_str());
                           return pkt;
                     - delay: 200ms
                     - ble_client.ble_write:
@@ -92,6 +92,23 @@ ble_client:
         - logger.log: "wrgb2: verbinding verbroken"
 
 script:
+  - id: wrgb2_verbind_als_klaar
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - switch.turn_on: wrgb2_verbinding
+
+  # Alleen verbinden als in handmatige modus — voorkomt onnodige reconnects bij slider-wijzigingen
+  - id: wrgb2_verbind_als_klaar_manueel
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden) && !id(wrgb2_auto_modus);
+          then:
+            - switch.turn_on: wrgb2_verbinding
+
   # Stuurt helderheid per kanaal (R, G, B) — lamp past direct aan
   - id: stuur_wrgb2_brightness
     then:
@@ -138,9 +155,7 @@ script:
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t ramp = (uint8_t)id(wrgb2_ramp).state;
-            if (ramp == 90) ramp = 89;
-            return chihiros::wrgb_schedule(id(fotoperiode_start).hour, id(fotoperiode_start).minute, id(fotoperiode_eind).hour, id(fotoperiode_eind).minute, ramp, 127, (uint8_t)id(wrgb2_schema_rood).state, (uint8_t)id(wrgb2_schema_groen).state, (uint8_t)id(wrgb2_schema_blauw).state, chihiros::next_seq(id(cmd_seq_wrgb2)));
+            return chihiros::wrgb_schedule(id(fotoperiode_start).hour, id(fotoperiode_start).minute, id(fotoperiode_eind).hour, id(fotoperiode_eind).minute, chihiros::wrgb2_ramp_veilig((uint8_t)id(wrgb2_ramp).state), 127, (uint8_t)id(wrgb2_schema_rood).state, (uint8_t)id(wrgb2_schema_groen).state, (uint8_t)id(wrgb2_schema_blauw).state, chihiros::next_seq(id(cmd_seq_wrgb2)));
       - delay: 200ms
       # Zet lamp in auto modus — volgt voortaan het schema
       - logger.log: "wrgb2: auto modus activeren"
@@ -174,20 +189,12 @@ switch:
       - globals.set:
           id: wrgb2_auto_modus
           value: 'true'
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: wrgb2_verbinding
+      - script.execute: wrgb2_verbind_als_klaar
     turn_off_action:
       - globals.set:
           id: wrgb2_auto_modus
           value: 'false'
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: wrgb2_verbinding
+      - script.execute: wrgb2_verbind_als_klaar
 
 number:
   - platform: template
@@ -202,12 +209,7 @@ number:
     unit_of_measurement: "%"
     optimistic: true
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar) && !id(wrgb2_auto_modus);
-            then:
-              - switch.turn_on: wrgb2_verbinding
+      - script.execute: wrgb2_verbind_als_klaar_manueel
 
   - platform: template
     name: "WRGB2 groen"
@@ -221,12 +223,7 @@ number:
     unit_of_measurement: "%"
     optimistic: true
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar) && !id(wrgb2_auto_modus);
-            then:
-              - switch.turn_on: wrgb2_verbinding
+      - script.execute: wrgb2_verbind_als_klaar_manueel
 
   - platform: template
     name: "WRGB2 blauw"
@@ -240,12 +237,7 @@ number:
     unit_of_measurement: "%"
     optimistic: true
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar) && !id(wrgb2_auto_modus);
-            then:
-              - switch.turn_on: wrgb2_verbinding
+      - script.execute: wrgb2_verbind_als_klaar_manueel
 
   - platform: template
     name: "WRGB2 schema ramp"
@@ -301,22 +293,14 @@ button:
     id: btn_wrgb2_schema
     icon: mdi:clock-edit
     on_press:
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: wrgb2_verbinding
+      - script.execute: wrgb2_verbind_als_klaar
 
   - platform: template
     name: "WRGB2 RTC sync"
     id: btn_wrgb2_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: wrgb2_verbinding
+      - script.execute: wrgb2_verbind_als_klaar
 
 sensor:
   - platform: ble_client
@@ -330,6 +314,5 @@ sensor:
     internal: true
     unit_of_measurement: ""
     lambda: |-
-      ESP_LOGI("wrgb2", "Notificatie (%d bytes):", x.size());
-      for (int i = 0; i < (int)x.size(); i++) ESP_LOGI("wrgb2", "  [%d] = 0x%02x (%d)", i, x[i], x[i]);
+      ESP_LOGI("wrgb2", "Notificatie (%d bytes): %s", (int)x.size(), chihiros::hex_dump(x).c_str());
       return NAN;

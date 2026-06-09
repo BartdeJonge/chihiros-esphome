@@ -22,11 +22,17 @@ substitutions:
   ble_tx: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
   ble_rx: "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [chihiros_ble]
+
+chihiros_ble:
+
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
-  includes:
-    - chihiros_ble.h
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -50,7 +56,7 @@ logger:
     ble_client: DEBUG
 
 globals:
-  - id: co2_boot_klaar
+  - id: ha_verbonden
     type: bool
     restore_value: false
     initial_value: 'false'
@@ -61,9 +67,9 @@ api:
   on_client_connected:
     - if:
         condition:
-          lambda: return !id(co2_boot_klaar);
+          lambda: return !id(ha_verbonden);
         then:
-          - lambda: id(co2_boot_klaar) = true;
+          - lambda: id(ha_verbonden) = true;
           - if:
               condition:
                 lambda: return strcmp("${wrgb2_mac}", "00:00:00:00:00:00") != 0;
@@ -120,4 +126,4 @@ packages:
   doctor:     !include aquarium-ble-bridge-doctor.yaml
   wrgb2:      !include aquarium-ble-bridge-wrgb2.yaml
   co2:        !include aquarium-ble-bridge-co2.yaml
-  # dosing:   !include aquarium-ble-bridge-dosing.yaml  # wacht op MAC + protocol sniffing
+  dosing:     !include aquarium-ble-bridge-dosing.yaml

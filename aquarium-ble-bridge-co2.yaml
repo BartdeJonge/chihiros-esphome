@@ -62,13 +62,13 @@ ble_client:
                   characteristic_uuid: ${ble_tx}
                   value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_co2)++);
               - delay: 200ms
-              - lambda: id(co2_rtc_only) = false;
+              - globals.set:
+                  id: co2_rtc_only
+                  value: 'false'
               - switch.turn_off: co2_verbinding
               - logger.log: "co2: RTC sync klaar"
             else:
               # Volledige config: RTC ×2 → schema reset → tijdslots
-              # Synchroniseert de interne klok — apparaat gebruikt RTC voor CO2-schema's
-              # App stuurt RTC twee keer; we volgen dat gedrag
               - logger.log:
                   format: "co2: RTC %04d-%02d-%02d %02d:%02d:%02d"
                   args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
@@ -105,8 +105,7 @@ ble_client:
                         service_uuid: ${ble_service}
                         characteristic_uuid: ${ble_tx}
                         value: !lambda |-
-                          int total = id(fotoperiode_start).hour * 60 + id(fotoperiode_start).minute - (int)id(co2_prestart).state;
-                          if (total < 0) total += 1440;
+                          int total = chihiros::co2_start_minuten(id(fotoperiode_start).hour, id(fotoperiode_start).minute, (int)id(co2_prestart).state);
                           return chihiros::co2_schema(total / 60, total % 60, chihiros::data::CO2_ON, id(cmd_seq_co2)++);
                     - delay: 100ms
                     - logger.log:
@@ -125,8 +124,7 @@ ble_client:
                         service_uuid: ${ble_service}
                         characteristic_uuid: ${ble_tx}
                         value: !lambda |-
-                          int total = id(fotoperiode_start).hour * 60 + id(fotoperiode_start).minute - (int)id(co2_prestart).state;
-                          if (total < 0) total += 1440;
+                          int total = chihiros::co2_start_minuten(id(fotoperiode_start).hour, id(fotoperiode_start).minute, (int)id(co2_prestart).state);
                           return chihiros::co2_schema(total / 60, total % 60, chihiros::data::CO2_EMPTY, id(cmd_seq_co2)++);
                     - delay: 100ms
                     - ble_client.ble_write:
@@ -140,6 +138,15 @@ ble_client:
     on_disconnect:
       then:
         - logger.log: "co2: verbinding verbroken"
+
+script:
+  - id: co2_verbind_als_klaar
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - switch.turn_on: co2_verbinding
 
 switch:
   - platform: ble_client
@@ -155,19 +162,15 @@ switch:
     restore_mode: RESTORE_DEFAULT_ON
     lambda: return id(co2_schema_actief);
     turn_on_action:
-      - lambda: id(co2_schema_actief) = true;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: co2_verbinding
+      - globals.set:
+          id: co2_schema_actief
+          value: 'true'
+      - script.execute: co2_verbind_als_klaar
     turn_off_action:
-      - lambda: id(co2_schema_actief) = false;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: co2_verbinding
+      - globals.set:
+          id: co2_schema_actief
+          value: 'false'
+      - script.execute: co2_verbind_als_klaar
 
 button:
   - platform: template
@@ -175,24 +178,17 @@ button:
     id: btn_co2_schema
     icon: mdi:molecule-co2
     on_press:
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: co2_verbinding
+      - script.execute: co2_verbind_als_klaar
 
   - platform: template
     name: "CO2 RTC sync"
     id: btn_co2_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - lambda: id(co2_rtc_only) = true;
-            - switch.turn_on: co2_verbinding
-
+      - globals.set:
+          id: co2_rtc_only
+          value: 'true'
+      - script.execute: co2_verbind_als_klaar
 
 sensor:
   - platform: ble_client
@@ -206,10 +202,6 @@ sensor:
     internal: true
     unit_of_measurement: ""
     lambda: |-
-      ESP_LOGI("co2", "Notificatie: %s", [&](){
-        std::string s;
-        for (auto b : x) { char buf[4]; snprintf(buf, sizeof(buf), "%02x ", b); s += buf; }
-        return s;
-      }().c_str());
+      ESP_LOGI("co2", "Notificatie: %s", chihiros::hex_dump(x).c_str());
       if (x.size() >= 7) return (float)x[6];
       return NAN;

@@ -1,6 +1,8 @@
 #pragma once
 #include <vector>
 #include <cstdint>
+#include <cstdio>
+#include <string>
 #include <initializer_list>
 
 // Chihiros Nordic UART protocol helpers.
@@ -36,6 +38,8 @@ namespace data {
   constexpr uint8_t AUTH_BASE    = 0x01;
   constexpr uint8_t AUTH_EXT1    = 0x06;  // fan extra auth step 1
   constexpr uint8_t AUTH_EXT2    = 0x08;  // fan extra auth step 2
+  constexpr uint8_t AUTH_DOSE1   = 0x04;  // dosing pump extra auth step 1
+  constexpr uint8_t AUTH_DOSE2   = 0x05;  // dosing pump extra auth step 2
   constexpr uint8_t RESET_SCHEMA = 0x07;  // CO2: evaluate schedule now
   constexpr uint8_t RESET_AUTO   = 0x12;  // CO2: switch to auto mode
   constexpr uint8_t SILENT_ON    = 0x22;
@@ -86,7 +90,7 @@ inline uint8_t next_seq(uint8_t& counter) {
 }
 
 // Builds an RTC sync packet from an ESPTime value.
-inline std::vector<uint8_t> rtc_pakket(ESPTime t, uint8_t seq) {
+inline std::vector<uint8_t> rtc_pakket(esphome::ESPTime t, uint8_t seq) {
     return pakket(hdr::BASE, cmd::RTC, {
         (uint8_t)(t.year - 2000), (uint8_t)t.month,
         (uint8_t)((t.day_of_week + 5) % 7 + 1),
@@ -115,6 +119,12 @@ inline std::vector<uint8_t> auth_ext1(uint8_t seq) {
 }
 inline std::vector<uint8_t> auth_ext2(uint8_t seq) {
     return pakket(hdr::DEVICE, cmd::AUTH, {data::AUTH_EXT2}, seq);
+}
+inline std::vector<uint8_t> auth_dose1(uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::AUTH, {data::AUTH_DOSE1}, seq);
+}
+inline std::vector<uint8_t> auth_dose2(uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::AUTH, {data::AUTH_DOSE2}, seq);
 }
 
 // ── Mode ──────────────────────────────────────────────────────────────────────
@@ -192,6 +202,77 @@ inline std::vector<uint8_t> wrgb_schedule(uint8_t on_h, uint8_t on_m,
 // Doctor Mate: b1=0x00 always; b2=ec for TDS (pos 1) or volume for Volume (pos 2).
 inline std::vector<uint8_t> device_settings(uint8_t b1, uint8_t b2, uint8_t seq) {
     return pakket(hdr::DEVICE, cmd::SETTINGS, {b1, b2}, seq);
+}
+
+// Dosing pump: trigger a manual dose for one pump.
+// pump_idx: 0=pomp1, 1=pomp2, 2=pomp3
+// vol_01ml: volume in 0.1 mL units (10 = 1.0 mL, 255 = 25.5 mL)
+// cmd reuses STIR_SPEED (0x1b) — confirmed from btsnoop 2026-06-08
+inline std::vector<uint8_t> dose_pump(uint8_t pump_idx, uint8_t vol_01ml, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_SPEED, {pump_idx, 0x00, 0x00, 0x00, vol_01ml}, seq);
+}
+
+// Dosing pump schedule — three separate writes needed per pump.
+// Time encoding: hour split across STIR_TIMER[2]=hour>>1 and STIR_SPEED[2]=hour&1
+// weekdays: Mon=64 Tue=32 Wed=16 Thu=8 Fri=4 Sat=2 Sun=1 (same as WRGB2)
+// vol_01ml: 0.1 mL per unit. minute: 0-59 (use 0 if unsure).
+// Disable: send dose_schedule_enable with enable=false.
+inline std::vector<uint8_t> dose_schedule_enable(uint8_t pump_idx, bool enable, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_ENABLE, {pump_idx, 0x00, enable ? (uint8_t)0x01 : (uint8_t)0x00}, seq);
+}
+inline std::vector<uint8_t> dose_schedule_speed(uint8_t pump_idx, uint8_t weekdays, uint8_t hour, uint8_t minute, uint8_t vol_01ml, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_SPEED, {pump_idx, weekdays, (uint8_t)(hour & 1), minute, 0x00, vol_01ml}, seq);
+}
+inline std::vector<uint8_t> dose_schedule_timer(uint8_t pump_idx, uint8_t hour, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_TIMER, {pump_idx, 0x00, (uint8_t)(hour >> 1), 0x00, 0x00, 0x00}, seq);
+}
+
+// ── Bridge utilities ─────────────────────────────────────────────────────────
+
+// Formats a BLE notification payload as a hex string for logging.
+inline std::string hex_dump(const std::vector<uint8_t>& data) {
+    std::string s;
+    s.reserve(data.size() * 3);
+    for (auto b : data) {
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%02x ", b);
+        s += buf;
+    }
+    return s;
+}
+
+// Calculates CO2 start time: fotoperiode_start minus prestart minutes, midnight-safe.
+// Returns minutes since midnight (0–1439).
+inline int co2_start_minuten(int fotoperiode_uur, int fotoperiode_min, int prestart_min) {
+    int total = fotoperiode_uur * 60 + fotoperiode_min - prestart_min;
+    if (total < 0) total += 1440;
+    return total;
+}
+
+// Parsed sensor values from a ventilator BLE notification frame.
+struct VentilatorNotificatie {
+    float fan_speed;   // %
+    float kamer_temp;  // °C  (byte[6:7] / 256)
+    float water_temp;  // °C  (byte[11] / 10)
+    float humidity;    // %   (byte[12])
+    bool  valid;
+};
+
+inline VentilatorNotificatie parse_ventilator_notificatie(const std::vector<uint8_t>& x) {
+    VentilatorNotificatie d{};
+    if (x.size() >= 13 && x[4] == 0x01) {
+        d.valid      = true;
+        d.fan_speed  = (float)x[5];
+        d.kamer_temp = ((x[6] << 8) | x[7]) / 256.0f;
+        d.water_temp = x[11] / 10.0f;
+        d.humidity   = (float)x[12];
+    }
+    return d;
+}
+
+// WRGB2: ramp waarde 90 is verboden (= 0x5a frame header) — kap af naar 89.
+inline uint8_t wrgb2_ramp_veilig(uint8_t ramp) {
+    return ramp == 90u ? 89u : ramp;
 }
 
 } // namespace chihiros

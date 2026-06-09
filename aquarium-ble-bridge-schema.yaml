@@ -22,7 +22,7 @@ datetime:
       then:
         - if:
             condition:
-              lambda: return id(co2_boot_klaar);
+              lambda: return id(ha_verbonden);
             then:
               - switch.turn_on: co2_verbinding
               - switch.turn_on: wrgb2_verbinding
@@ -39,7 +39,7 @@ datetime:
       then:
         - if:
             condition:
-              lambda: return id(co2_boot_klaar);
+              lambda: return id(ha_verbonden);
             then:
               - switch.turn_on: co2_verbinding
               - switch.turn_on: wrgb2_verbinding
@@ -60,6 +60,6 @@ number:
       then:
         - if:
             condition:
-              lambda: return id(co2_boot_klaar);
+              lambda: return id(ha_verbonden);
             then:
               - switch.turn_on: co2_verbinding

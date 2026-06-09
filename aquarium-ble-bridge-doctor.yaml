@@ -62,12 +62,13 @@ ble_client:
                   characteristic_uuid: ${ble_tx}
                   value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_doctor)++);
               - delay: 200ms
-              - lambda: id(doctor_rtc_only) = false;
+              - globals.set:
+                  id: doctor_rtc_only
+                  value: 'false'
               - switch.turn_off: doctor_verbinding
               - logger.log: "doctor: RTC sync klaar"
             else:
               # Volledige config: RTC → TDS → volume
-              # Klok synchroniseren
               - logger.log:
                   format: "doctor: RTC %04d-%02d-%02d %02d:%02d:%02d"
                   args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
@@ -87,6 +88,14 @@ ble_client:
         - logger.log: "doctor: verbinding verbroken"
 
 script:
+  - id: doctor_verbind_als_klaar
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - switch.turn_on: doctor_verbinding
+
   # TDS (positie 1) gevolgd door Volume (positie 2) — volgorde essentieel.
   # Apparaat onderscheidt de twee writes ALLEEN op volgorde, het frameformaat is identiek.
   - id: stuur_doctor_instellingen
@@ -125,12 +134,10 @@ button:
     id: btn_doctor_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - lambda: id(doctor_rtc_only) = true;
-            - switch.turn_on: doctor_verbinding
+      - globals.set:
+          id: doctor_rtc_only
+          value: 'true'
+      - script.execute: doctor_verbind_als_klaar
 
 number:
   - platform: template
@@ -145,12 +152,7 @@ number:
     unit_of_measurement: "ppm"
     optimistic: true
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar);
-            then:
-              - switch.turn_on: doctor_verbinding
+      - script.execute: doctor_verbind_als_klaar
 
   - platform: template
     name: "Doctor Mate volume"
@@ -164,12 +166,7 @@ number:
     unit_of_measurement: "L"
     optimistic: true
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar);
-            then:
-              - switch.turn_on: doctor_verbinding
+      - script.execute: doctor_verbind_als_klaar
 
 select:
   - platform: template
@@ -185,15 +182,28 @@ select:
       - "Manueel"
     initial_option: "Manueel"
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(co2_boot_klaar);
-            then:
-              - lambda: |-
-                  if (x == "Plant (80 ppm)")        id(num_doctor_tds).make_call().set_value(80).perform();
-                  else if (x == "Vis (93 ppm)")     id(num_doctor_tds).make_call().set_value(93).perform();
-                  else if (x == "Garnaal (66 ppm)") id(num_doctor_tds).make_call().set_value(66).perform();
+      # Profiel-keuze past de TDS-waarde aan; num_doctor_tds.on_value triggert daarna de verbinding
+      - if:
+          condition:
+            lambda: return x == "Plant (80 ppm)";
+          then:
+            - number.set:
+                id: num_doctor_tds
+                value: 80
+      - if:
+          condition:
+            lambda: return x == "Vis (93 ppm)";
+          then:
+            - number.set:
+                id: num_doctor_tds
+                value: 93
+      - if:
+          condition:
+            lambda: return x == "Garnaal (66 ppm)";
+          then:
+            - number.set:
+                id: num_doctor_tds
+                value: 66
 
 sensor:
   - platform: ble_client
@@ -207,8 +217,7 @@ sensor:
     internal: true
     unit_of_measurement: ""
     lambda: |-
-      ESP_LOGI("doctor", "Notificatie (%d bytes):", x.size());
-      for (int i = 0; i < (int)x.size(); i++) ESP_LOGI("doctor", "  [%d] = 0x%02x (%d)", i, x[i], x[i]);
+      ESP_LOGI("doctor", "Notificatie (%d bytes): %s", (int)x.size(), chihiros::hex_dump(x).c_str());
       if (x.size() >= 6 && x[5] > 0 && x[5] != 0xff) {
         id(sensor_doctor_ec).publish_state((float)x[5]);
       }

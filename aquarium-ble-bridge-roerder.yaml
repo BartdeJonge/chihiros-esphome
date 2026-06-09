@@ -72,12 +72,13 @@ ble_client:
                   characteristic_uuid: ${ble_tx}
                   value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_roerder)++);
               - delay: 200ms
-              - lambda: id(roerder_rtc_only) = false;
+              - globals.set:
+                  id: roerder_rtc_only
+                  value: 'false'
               - switch.turn_off: roerder_verbinding
               - logger.log: "roerder: RTC sync klaar"
             else:
               # Volledige config: RTC → config per kanaal → staat herstel
-              # Klok synchroniseren — roerder gebruikt RTC voor zijn timer-schema
               - logger.log:
                   format: "roerder: RTC %04d-%02d-%02d %02d:%02d:%02d"
                   args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
@@ -97,6 +98,14 @@ ble_client:
         - logger.log: "roerder: verbinding verbroken"
 
 script:
+  - id: roerder_verbind_als_klaar
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - switch.turn_on: roerder_verbinding
+
   # Stuurt drie writes per kanaal: activeren, snelheid, timer
   - id: stuur_kanaal_config
     parameters:
@@ -188,19 +197,15 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
     lambda: return id(roerder_k0_aan);
     turn_on_action:
-      - lambda: id(roerder_k0_aan) = true;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_k0_aan
+          value: 'true'
+      - script.execute: roerder_verbind_als_klaar
     turn_off_action:
-      - lambda: id(roerder_k0_aan) = false;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_k0_aan
+          value: 'false'
+      - script.execute: roerder_verbind_als_klaar
 
   - platform: template
     name: "Roerder kanaal 1"
@@ -209,19 +214,15 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
     lambda: return id(roerder_k1_aan);
     turn_on_action:
-      - lambda: id(roerder_k1_aan) = true;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_k1_aan
+          value: 'true'
+      - script.execute: roerder_verbind_als_klaar
     turn_off_action:
-      - lambda: id(roerder_k1_aan) = false;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_k1_aan
+          value: 'false'
+      - script.execute: roerder_verbind_als_klaar
 
   - platform: template
     name: "Roerder kanaal 2"
@@ -230,19 +231,15 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
     lambda: return id(roerder_k2_aan);
     turn_on_action:
-      - lambda: id(roerder_k2_aan) = true;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_k2_aan
+          value: 'true'
+      - script.execute: roerder_verbind_als_klaar
     turn_off_action:
-      - lambda: id(roerder_k2_aan) = false;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_k2_aan
+          value: 'false'
+      - script.execute: roerder_verbind_als_klaar
 
   - platform: template
     name: "Roerder kanaal 3"
@@ -251,19 +248,15 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
     lambda: return id(roerder_k3_aan);
     turn_on_action:
-      - lambda: id(roerder_k3_aan) = true;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_k3_aan
+          value: 'true'
+      - script.execute: roerder_verbind_als_klaar
     turn_off_action:
-      - lambda: id(roerder_k3_aan) = false;
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_k3_aan
+          value: 'false'
+      - script.execute: roerder_verbind_als_klaar
 
 button:
   - platform: template
@@ -278,12 +271,10 @@ button:
     id: btn_roerder_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - if:
-          condition:
-            lambda: return id(co2_boot_klaar);
-          then:
-            - lambda: id(roerder_rtc_only) = true;
-            - switch.turn_on: roerder_verbinding
+      - globals.set:
+          id: roerder_rtc_only
+          value: 'true'
+      - script.execute: roerder_verbind_als_klaar
 
 number:
   - platform: template
@@ -429,4 +420,3 @@ number:
     optimistic: true
     unit_of_measurement: "min"
     icon: mdi:timer-outline
-
