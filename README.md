@@ -463,7 +463,19 @@ sequenceDiagram
 Schedule data: `[on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B, 0xff×5]`
 
 - `ramp_min`: fade duration 0–150 min. **Value 90 is forbidden** (= 0x5a frame header) → use 89.
-- `weekdays`: bitmask Mon=64..Sun=1; 127 = every day.
+- `weekdays`: bitmask — each bit is one day:
+
+  | Dag / Day | Dec |  Hex |
+  |-----------|----:|-----:|
+  | Ma / Mon  |  64 | 0x40 |
+  | Di / Tue  |  32 | 0x20 |
+  | Wo / Wed  |  16 | 0x10 |
+  | Do / Thu  |   8 | 0x08 |
+  | Vr / Fri  |   4 | 0x04 |
+  | Za / Sat  |   2 | 0x02 |
+  | Zo / Sun  |   1 | 0x01 |
+
+  Common values: every day = 127 (0x7f) · workdays (Ma–Vr) = 124 (0x7c) · weekend = 3 (0x03) · Mon+Wed+Thu = 88 (0x58)
 - `R/G/B = 0xff` = delete marker (deactivate schedule).
 
 <details>
@@ -524,7 +536,19 @@ sequenceDiagram
 
 Supports 4 pumps (0-indexed). Volume in 0.1 mL units. Hour is split across two frames: `TIMER[2] = hour >> 1`, `SPEED[2] = hour & 1`.
 
-Weekdays bitmask: Mon=64 Tue=32 Wed=16 Thu=8 Fri=4 Sat=2 Sun=1 (same as WRGB2).
+Weekdays bitmask — each bit is one day (same encoding as WRGB2):
+
+| Dag / Day | Dec |  Hex |
+|-----------|----:|-----:|
+| Ma / Mon  |  64 | 0x40 |
+| Di / Tue  |  32 | 0x20 |
+| Wo / Wed  |  16 | 0x10 |
+| Do / Thu  |   8 | 0x08 |
+| Vr / Fri  |   4 | 0x04 |
+| Za / Sat  |   2 | 0x02 |
+| Zo / Sun  |   1 | 0x01 |
+
+Common values: every day = 127 (0x7f) · workdays (Ma–Vr) = 124 (0x7c) · weekend = 3 (0x03) · Mon+Wed+Thu = 88 (0x58)
 
 Manual dose triggers immediately; schedule runs autonomously on the pump's internal RTC.
 
