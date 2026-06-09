@@ -267,6 +267,25 @@ sequenceDiagram
 
 > **Note:** The CO2 valve physically actuates (audible click) on every connect. This is normal — the controller briefly opens and then closes the valve as it evaluates the new schedule against the current time. Avoid connecting more often than necessary.
 
+<details>
+<summary>Wire examples — connect + schema (2026-06-09 14:30, fotoperiode 09:00–22:00, prestart 60 min)</summary>
+
+```
+Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
+
+1. auth           5a 01 06 00 01 04 01 03
+2. rtc            5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
+3. rtc (2nd)      5a 01 0b 00 03 09 1a 06 01 0e 1e 00 0d
+4. reset_schema   5a 01 08 00 04 05 07 ff ff 0f
+5. schema ON      5a 01 08 00 05 16 08 00 64 76   08:00 CO2_ON  (0x64)
+6. schema OFF     5a 01 08 00 06 16 16 00 00 0f   22:00 CO2_OFF (0x00)
+
+Schema inactive (both slots empty):
+5. schema EMPTY   5a 01 08 00 05 16 08 00 6f 19
+6. schema EMPTY   5a 01 08 00 06 16 16 00 6f 06
+```
+</details>
+
 ---
 
 ## Magnetic Stirrer (4-channel)
@@ -291,6 +310,28 @@ sequenceDiagram
 ```
 
 Channel on/off state is stored in NVS globals (`restore_value: true`) so after an ESP reboot the stirrer returns to the last-known state. Speed encoding: HA 0–100% → device 0–127.
+
+<details>
+<summary>Wire examples — connect (ch0 60% speed, 5 min on / 30 min interval) + real-time toggle</summary>
+
+```
+Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
+
+Connect sequence:
+1. auth             5a 01 06 00 01 04 01 03
+2. rtc              5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
+3. stir_enable ch0  a5 01 08 00 03 20 00 00 01 2b
+4. stir_speed  ch0  a5 01 0b 00 04 1b 00 4c 01 00 00 00 58   speed=76/127 (≈60%)
+5. stir_timer  ch0  a5 01 0b 00 05 15 00 00 05 1e 00 00 01   5 min on, 30 min interval
+6. stir_apply       a5 01 06 00 06 1f 00 1e
+7. stir_restore     a5 01 0f 00 07 14 ff ff 01 01 01 01 ff ff ff ff 1d   all 4 channels on
+
+Real-time toggle (STIR_TOGGLE — only target channel, rest 0xff = SKIP):
+toggle ch0 ON   a5 01 0f 00 01 14 ff ff 01 ff ff ff ff ff ff ff e5
+toggle ch0 OFF  a5 01 0f 00 01 14 ff ff 00 ff ff ff ff ff ff ff e4
+                                         ^^ byte[2+channel]
+```
+</details>
 
 ---
 
@@ -327,6 +368,31 @@ Notifications (`x[4] == 0x01`):
 | `x[11] / 10` | Water temperature (°C) |
 | `x[12]` | Humidity (%) |
 
+<details>
+<summary>Wire examples — connect (silent on, 28–32°C) + notification decode</summary>
+
+```
+Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
+
+Connect sequence:
+1. auth        5a 01 06 00 01 04 01 03
+2. rtc         5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
+3. rtc (2nd)   5a 01 0b 00 03 09 1a 06 01 0e 1e 00 0d
+4. auth_ext1   a5 01 06 00 04 04 06 01
+5. auth_ext2   a5 01 06 00 05 04 08 0e
+6. silent ON   5a 01 08 00 06 05 22 ff ff 28   (0x22=ON, 0x23=OFF — inverted!)
+7. temp_thresh a5 01 08 00 07 21 1c 20 ff ec   28°C start, 32°C max
+8. fan_speed   5a 01 07 00 08 07 ff 00 f6       0 = auto
+
+Notification (x[4] == 0x01):
+00 00 00 00 01 2d 18 80 00 00 00 fa 3e
+                  ^^                        x[5]    = 45  → fan 45%
+                     ^^ ^^                  x[6:7]  = 0x1880 → 24.5°C room
+                                 ^^         x[11]   = 250 → 25.0°C water
+                                    ^^      x[12]   = 62  → 62% humidity
+```
+</details>
+
 ---
 
 ## Doctor Mate
@@ -348,6 +414,21 @@ sequenceDiagram
 TDS and Volume use **identical frames** — device distinguishes them **only by send order**. Always send both in this order.
 
 Encoding: EC (µS/cm) = ppm ÷ 0.4. Volume = liters × 2.
+
+<details>
+<summary>Wire examples — connect (EC=100 µS/cm, volume=100 L)</summary>
+
+```
+Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
+
+1. auth_device    a5 01 06 00 01 04 01 03   (DEVICE header 0xa5)
+2. rtc            5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
+3. settings TDS   a5 01 07 00 03 01 00 64 60   b2=0x64 (100 µS/cm), pos1
+4. settings VOL   a5 01 07 00 04 01 00 c8 cb   b2=0xc8 (200 = 100 L × 2), pos2
+
+Frames 3 and 4 are byte-identical except b2 — order determines meaning.
+```
+</details>
 
 ---
 
@@ -385,6 +466,33 @@ Schedule data: `[on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B, 0xff×5]
 - `weekdays`: bitmask Mon=64..Sun=1; 127 = every day.
 - `R/G/B = 0xff` = delete marker (deactivate schedule).
 
+<details>
+<summary>Wire examples — auto schedule (09:00–22:00, ramp 30 min, R=61 G=45 B=80) + manual brightness</summary>
+
+```
+Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
+Note: seq must never be 0x5a — use next_seq() which skips value 90.
+
+Auto schedule:
+1. rtc            5a 01 0b 00 01 09 1a 06 01 0e 1e 00 0f
+2. rtc (2nd)      5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
+3. reset_schema   5a 01 08 00 03 05 07 ff ff 08
+4. wrgb_schedule  a5 01 13 00 04 19 09 00 16 00 1e 7f 3d 2d 50 ff ff ff ff ff ce
+                                          ^^ ^^             ^^                      on  09:00
+                                                ^^ ^^                               off 22:00
+                                                      ^^                            ramp 30 min
+                                                         ^^                         weekdays 0x7f = every day
+                                                            ^^ ^^ ^^                R=61 G=45 B=80
+5. reset_auto     5a 01 08 00 05 05 12 ff ff 1b
+6. rtc (trigger)  5a 01 0b 00 06 09 1a 06 01 0e 1e 00 08
+
+Manual brightness (R=80, G=60, B=100):
+1. wrgb_ch R      5a 01 07 00 01 07 00 50 50   channel=0x00
+2. wrgb_ch G      5a 01 07 00 02 07 01 3c 3e   channel=0x01
+3. wrgb_ch B      5a 01 07 00 03 07 02 64 64   channel=0x02
+```
+</details>
+
 ---
 
 ## Dosing Pump
@@ -419,6 +527,37 @@ Supports 3 pumps (0-indexed). Volume in 0.1 mL units. Hour is split across two f
 Weekdays bitmask: Mon=64 Tue=32 Wed=16 Thu=8 Fri=4 Sat=2 Sun=1 (same as WRGB2).
 
 Manual dose triggers immediately; schedule runs autonomously on the pump's internal RTC.
+
+<details>
+<summary>Wire examples — connect + manual dose 2.0 mL + schedule pump 1 every day 09:00 1.5 mL</summary>
+
+```
+Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
+
+Connect sequence:
+1. auth        5a 01 06 00 01 04 01 03
+2. rtc         5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
+3. rtc (2nd)   5a 01 0b 00 03 09 1a 06 01 0e 1e 00 0d
+4. auth_dose1  a5 01 06 00 04 04 04 03
+5. auth_dose2  a5 01 06 00 05 04 05 03
+
+Manual dose pump 1 (pump_idx=0x00), 2.0 mL (vol_01ml=20=0x14):
+   dose_pump    a5 01 0a 00 06 1b 00 00 00 00 14 02
+
+Schedule pump 1, every day (0x7f), 09:00, 1.5 mL (vol=15=0x0f):
+   hour=9 → TIMER[2]=hour>>1=4, SPEED[2]=hour&1=1
+   schedule_enable  a5 01 08 00 06 20 00 00 01 2e
+   schedule_speed   a5 01 0b 00 07 1b 00 7f 01 00 00 0f 67
+                                         ^^                  pump_idx=0
+                                            ^^               weekdays=0x7f (all)
+                                               ^^            hour & 1 = 1
+                                                  ^^         minute=0
+                                                        ^^   vol=15 (1.5 mL)
+   schedule_timer   a5 01 0b 00 08 15 00 00 04 00 00 00 13
+                                         ^^                  pump_idx=0
+                                               ^^            hour >> 1 = 4
+```
+</details>
 
 ---
 
