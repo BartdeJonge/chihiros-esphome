@@ -58,7 +58,7 @@ sequenceDiagram
 | Magnetic Stirrer | On boot + when a channel is toggled or settings change |
 | Doctor Mate | On boot + when TDS/volume settings change |
 | Cooling Fan | **Every 5 minutes** (for temperature readings) + when settings change |
-| Dosing Pump | Not yet implemented |
+| Dosing Pump | On boot + when a schedule or manual dose changes |
 
 **Benefit**: the BLE scanner is almost always free. Toggling a stirrer channel or pushing a new CO2 schedule typically completes within 2–4 seconds.
 
@@ -107,7 +107,7 @@ packages:
   ventilator: !include aquarium-ble-bridge-ventilator.yaml
   doctor:     !include aquarium-ble-bridge-doctor.yaml
   wrgb2:      !include aquarium-ble-bridge-wrgb2.yaml
-  # dosing:   !include aquarium-ble-bridge-dosing.yaml     # pending protocol
+  dosing:     !include aquarium-ble-bridge-dosing.yaml
 ```
 
 `schema.yaml` defines the shared `fotoperiode_start` / `fotoperiode_eind` datetimes and the `co2_prestart` offset — used by both CO2 and WRGB2.
@@ -145,7 +145,7 @@ This connect → configure → disconnect pattern is expected and correct.
 - **BLE connections**: up to 7 (`CONFIG_BT_ACL_CONNECTIONS: "7"`)
 - **BLE scan**: `interval: 320ms`, `window: 60ms`, continuous
 
-> **BLE 5.0 required.** The original ESP32 only supports BLE 4.2 and cannot handle multiple simultaneous BLE clients reliably. Use an **ESP32-S3** (or ESP32-C3/C6) which supports BLE 5.0. The S3 is recommended for its extra RAM, which is needed when running the BLE scanner alongside multiple client connections.
+> **BLE 5.0 required.** Chihiros devices use BLE 5.0 extended advertising — a classic ESP32 (BLE 4.2) will not detect them at all. Use an **ESP32-S3** (or ESP32-C3/C6). The S3 is recommended for its extra RAM, which is needed when running the BLE scanner alongside multiple client connections.
 
 ## Supported Devices
 
@@ -156,7 +156,7 @@ This connect → configure → disconnect pattern is expected and correct.
 | Cooling Fan | Working ✅ |
 | Doctor Mate | Working ✅ |
 | WRGB II | Working ✅ |
-| Dosing Pump | Skeleton only — protocol not yet reversed |
+| Dosing Pump | Working ✅ |
 
 ---
 
@@ -387,9 +387,36 @@ Schedule data: `[on_h, on_m, off_h, off_m, ramp_min, weekdays, R, G, B, 0xff×5]
 
 ## Dosing Pump
 
-> **Skeleton only.** Protocol not yet reverse-engineered.
+> Protocol verified via btsnoop HCI analysis (2026-06-08).
 
-Connect + auth + notification logging is implemented. To reverse-engineer: flash the skeleton, trigger a manual dose in the Chihiros app while watching ESPHome logs, identify the command bytes.
+```mermaid
+sequenceDiagram
+    participant ESP as ESP32-S3
+    participant DOP as Dosing Pump
+
+    ESP->>DOP: BLE connect
+    ESP->>DOP: AUTH (BASE 0x5a)
+    ESP->>DOP: RTC
+    ESP->>DOP: RTC (2nd)
+    ESP->>DOP: AUTH_DOSE1 (DEVICE 0xa5, data=0x04)
+    ESP->>DOP: AUTH_DOSE2 (DEVICE 0xa5, data=0x05)
+    alt manual dose
+        ESP->>DOP: DOSE cmd=0x1b [pump_idx, 0x00, 0x00, 0x00, vol_01ml]
+    else schedule update
+        loop for each pump 0..2
+            ESP->>DOP: STIR_ENABLE (pump_idx, enable)
+            ESP->>DOP: STIR_SPEED  (pump_idx, weekdays, hour&1, minute, 0x00, vol_01ml)
+            ESP->>DOP: STIR_TIMER  (pump_idx, 0x00, hour>>1, 0x00, 0x00, 0x00)
+        end
+    end
+    ESP->>DOP: BLE disconnect
+```
+
+Supports 3 pumps (0-indexed). Volume in 0.1 mL units. Hour is split across two frames: `TIMER[2] = hour >> 1`, `SPEED[2] = hour & 1`.
+
+Weekdays bitmask: Mon=64 Tue=32 Wed=16 Thu=8 Fri=4 Sat=2 Sun=1 (same as WRGB2).
+
+Manual dose triggers immediately; schedule runs autonomously on the pump's internal RTC.
 
 ---
 
