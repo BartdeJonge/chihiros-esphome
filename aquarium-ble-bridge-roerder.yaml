@@ -118,29 +118,26 @@ script:
           characteristic_uuid: ${ble_tx}
           value: !lambda return chihiros::stir_enable((uint8_t)kanaal, id(cmd_seq_roerder)++);
       - delay: 100ms
-      # Snelheid: 0-100% (HA) → 0-127 (apparaat-schaal)
+      # Weekdays: STIR_SPEED byte[1] = weekdays bitmask (0x7f = elke dag)
+      # Bevestigd btsnoop 2026-06-11: byte[1] is GEEN snelheid maar dagbitmask
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda return chihiros::stir_weekdays((uint8_t)kanaal, 0x7f, id(cmd_seq_roerder)++);
+      - delay: 100ms
+      # Schema snelheid + voorlooptijd via CMD_2A (bevestigd btsnoop 2026-06-11)
+      # snelheid 0-20 (app-schaal), voorloop in seconden
       - ble_client.ble_write:
           id: chihiros_roerder
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            float spd[] = {id(roerder_k0_snelheid).state, id(roerder_k1_snelheid).state,
-                           id(roerder_k2_snelheid).state, id(roerder_k3_snelheid).state};
-            // App schaal 0-20 → device schaal 0-127
-            return chihiros::stir_speed((uint8_t)kanaal, (uint8_t)(spd[kanaal] * 127.0f / 20.0f), id(cmd_seq_roerder)++);
+            uint8_t spd[] = {(uint8_t)id(roerder_k0_snelheid).state, (uint8_t)id(roerder_k1_snelheid).state,
+                             (uint8_t)id(roerder_k2_snelheid).state, (uint8_t)id(roerder_k3_snelheid).state};
+            return chihiros::stir_schema((uint8_t)kanaal, 0, spd[kanaal], id(cmd_seq_roerder)++);
       - delay: 100ms
-      # Timer: duur (minuten aan) en interval (minuten tussen cycli)
-      - ble_client.ble_write:
-          id: chihiros_roerder
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t dur[] = {(uint8_t)id(roerder_k0_duur).state, (uint8_t)id(roerder_k1_duur).state,
-                             (uint8_t)id(roerder_k2_duur).state, (uint8_t)id(roerder_k3_duur).state};
-            uint8_t ivl[] = {(uint8_t)id(roerder_k0_interval).state, (uint8_t)id(roerder_k1_interval).state,
-                             (uint8_t)id(roerder_k2_interval).state, (uint8_t)id(roerder_k3_interval).state};
-            return chihiros::stir_timer((uint8_t)kanaal, dur[kanaal], ivl[kanaal], id(cmd_seq_roerder)++);
-      - delay: 100ms
+      # TODO: STIR_TIMER mode 3 (uur/minuut/duur) toevoegen zodra start-tijd entiteiten bestaan
 
   # Herstel welke kanalen aan/uit staan — alle 4 in één write (0xff = niet aanraken)
   - id: herstel_roerder_staat

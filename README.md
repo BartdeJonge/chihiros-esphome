@@ -301,14 +301,15 @@ sequenceDiagram
     ESP->>STI: AUTH
     ESP->>STI: RTC
     loop for each channel 0..3
-        ESP->>STI: STIR_ENABLE (channel)
-        ESP->>STI: STIR_SPEED  (channel, 0–127)
-        ESP->>STI: STIR_TIMER  (channel, duration, interval)
+        ESP->>STI: STIR_ENABLE  (channel)
+        ESP->>STI: STIR_SPEED   (channel, weekdays=0x7f)
+        ESP->>STI: CMD_2A       (channel, voorloop_sec, snelheid_0-20)
+        ESP->>STI: STIR_TIMER   (channel, 0x03, hour, minute, duration_sec)
     end
     ESP->>STI: STIR_APPLY
     ESP->>STI: STIR_RESTORE (on/off bitmask all 4 channels)
     ESP->>STI: BLE disconnect
-    Note over STI: Runs timer cycles autonomously
+    Note over STI: Runs clock schedule autonomously
 ```
 
 Channel on/off state is stored in NVS globals (`restore_value: true`) so after an ESP reboot the stirrer returns to the last-known state.
@@ -317,11 +318,11 @@ Channel on/off state is stored in NVS globals (`restore_value: true`) so after a
 
 | Parameter | App label | Range | Unit | Command | Device encoding |
 |---|---|---|---|---|---|
-| Speed (direct) | Snelheid (direct) | 0–20 | — | `STIR_SPEED` | `speed * 127 / 20` → 0–127 |
-| Duration | Duur | 1–120 | seconds | `STIR_TIMER` byte[2] | raw byte (mode 0: byte[1]=0x00) |
-| Interval | Interval | 1–120 | seconds | `STIR_TIMER` byte[3] | raw byte (mode 0) |
+| Weekdays | Dagen | bitmask | — | `STIR_SPEED` byte[1] | Ma=64 Di=32 Wo=16 Do=8 Vr=4 Za=2 Zo=1; all=0x7f |
+| Start time | Begintijd | 0–23 / 0–59 | hour / min | `STIR_TIMER` mode 3 byte[2/3] | raw bytes |
+| Duration | Duur | 0–255 | seconds | `STIR_TIMER` mode 3 byte[5] | raw byte |
 | Lead time | Voorlooptijd | 0–255 | seconds | `CMD_2A` byte[2] | raw byte |
-| Speed (schema) | Snelheid (schema) | 0–20 | — | `CMD_2A` byte[3] | raw byte |
+| Speed | Snelheid | 0–20 | — | `CMD_2A` byte[3] | raw byte (app scale 0–20) |
 
 **STIR_TIMER has two modes** (determined by byte[1]):
 
@@ -343,19 +344,19 @@ Verified from btsnoop 2026-06-11: ch=2, voorlooptijd=36s, speed=20 → `02 00 24
 STIR_TIMER mode 3 verified 2026-06-11: ch=2, start=20:33, duration=150s → `02 03 14 21 00 96`. Duration in seconds (0x5a=90s also observed).
 
 <details>
-<summary>Wire examples — connect (ch0 speed=12/20, 13s on / 30s interval) + CMD_2A + real-time toggle</summary>
+<summary>Wire examples — connect (ch0 speed=12/20, start=20:33, duration=150s) + CMD_2A + real-time toggle</summary>
 
 ```
 Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
 
-Connect sequence:
-1. auth             5a 01 06 00 01 04 01 03
-2. rtc              5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
-3. stir_enable ch0  a5 01 08 00 03 20 00 00 01 2b
-4. stir_speed  ch0  a5 01 0b 00 04 1b 00 4c 01 00 00 00 58   speed=76/127 (≈12/20)
-5. stir_timer  ch0  a5 01 0b 00 05 15 00 00 0d 1e 00 00 01   mode 0: 13s on, 30s interval
-6. stir_apply       a5 01 06 00 06 1f 00 1e
-7. stir_restore     a5 01 0f 00 07 14 ff ff 01 01 01 01 ff ff ff ff 1d   all 4 channels on
+Connect sequence (confirmed app behavior btsnoop 2026-06-11):
+1. auth              5a 01 06 00 01 04 01 03
+2. rtc               5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
+3. stir_enable  ch0  a5 01 08 00 03 20 00 00 01 2b
+4. stir_weekdays ch0 a5 01 0b 00 04 1b 00 7f 01 00 00 00 86   weekdays=0x7f (every day)
+5. stir_timer   ch0  a5 01 0b 00 05 15 00 03 14 21 00 96 b3   mode 3: start=20:33, duration=150s
+6. stir_apply        a5 01 06 00 06 1f 00 1e
+7. stir_restore      a5 01 0f 00 07 14 ff ff 01 01 01 01 ff ff ff ff 1d   all 4 channels on
 
 CMD_2A — persistent schema settings (lead time + speed on 0-20 scale):
 ch2 voorloop=36s speed=20  a5 01 09 00 08 2a 02 00 24 14 0d

@@ -160,11 +160,17 @@ inline std::vector<uint8_t> fan_temp_thresh(uint8_t start_c, uint8_t max_c, uint
 inline std::vector<uint8_t> stir_enable(uint8_t channel, uint8_t seq) {
     return pakket(hdr::DEVICE, cmd::STIR_ENABLE, {channel, 0x00, 0x01}, seq);
 }
-inline std::vector<uint8_t> stir_speed(uint8_t channel, uint8_t speed_0_127, uint8_t seq) {
-    return pakket(hdr::DEVICE, cmd::STIR_SPEED, {channel, speed_0_127, 0x01, 0x00, 0x00, 0x00}, seq);
+// Schema weekdays: which days the autonomous schedule runs.
+// Confirmed from btsnoop 2026-06-11: byte[1] = weekdays bitmask (same encoding as WRGB2/dosing).
+// Ma=64 Di=32 Wo=16 Do=8 Vr=4 Za=2 Zo=1 — every day = 0x7f (127).
+// NOT a speed command — actual stirring speed is in stir_schema() (CMD_2A).
+inline std::vector<uint8_t> stir_weekdays(uint8_t channel, uint8_t weekdays, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_SPEED, {channel, weekdays, 0x01, 0x00, 0x00, 0x00}, seq);
 }
-inline std::vector<uint8_t> stir_timer(uint8_t channel, uint8_t duration, uint8_t interval, uint8_t seq) {
-    return pakket(hdr::DEVICE, cmd::STIR_TIMER, {channel, 0x00, duration, interval, 0x00, 0x00}, seq);
+// Daily clock schedule: run for duration_sec starting at HH:MM every day.
+// Confirmed from btsnoop 2026-06-11: [ch, 0x03, hour, minute, 0x00, duration_sec]
+inline std::vector<uint8_t> stir_timer(uint8_t channel, uint8_t hour, uint8_t minute, uint8_t duration_sec, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_TIMER, {channel, 0x03, hour, minute, 0x00, duration_sec}, seq);
 }
 // Persistent schema settings per channel: lead time (seconds) + speed (0-20 app scale).
 // Confirmed from btsnoop 2026-06-11: ch2 voorloop=36s speed=20 → 02002414, speed=2 → 02002402.
@@ -181,9 +187,11 @@ inline std::vector<uint8_t> stir_restore(uint8_t k0, uint8_t k1, uint8_t k2, uin
         {data::SKIP, data::SKIP, k0, k1, k2, k3, data::SKIP, data::SKIP, data::SKIP, data::SKIP}, seq);
 }
 
-// Percentage-based speed (0-100%) → device scale (0-127).
-inline std::vector<uint8_t> stir_speed_pct(uint8_t channel, float pct, uint8_t seq) {
-    return stir_speed(channel, (uint8_t)(pct * 127.0f / 100.0f), seq);
+// Raw STIR_SPEED (0x1b) send — byte[1] meaning depends on context:
+//   schema context (confirmed btsnoop 2026-06-11): byte[1] = weekdays bitmask (use stir_weekdays instead)
+//   direct BLE control: possibly speed 0-127 (unconfirmed — no btsnoop capture in Run mode)
+inline std::vector<uint8_t> stir_speed(uint8_t channel, uint8_t byte1, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::STIR_SPEED, {channel, byte1, 0x01, 0x00, 0x00, 0x00}, seq);
 }
 
 // ── WRGB2 ─────────────────────────────────────────────────────────────────────
