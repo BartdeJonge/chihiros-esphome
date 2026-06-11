@@ -214,8 +214,12 @@ chihiros::data::WRGB_B       // 0x02 — WRGB2 blue channel index
 chihiros::pakket(header, cmd, {data...}, seq)
 chihiros::pakket(header, cmd, std::vector<uint8_t>, seq)
 chihiros::rtc_pakket(ESPTime t, seq)
-chihiros::roerder_toggle(seq, channel, on)
-chihiros::stir_schema(channel, voorloop_sec, snelheid_0_20, seq)  // CMD_2A — lead time + speed on 0-20 scale
+chihiros::roerder_toggle(seq, channel, on)          // STIR_TOGGLE — direct on/off
+chihiros::stir_enable(channel, seq)                // STIR_ENABLE — activate channel in schema
+chihiros::stir_weekdays(channel, weekdays, seq)    // STIR_SPEED byte[1] = weekdays bitmask (0x7f = every day)
+chihiros::stir_schema(channel, voorloop_sec, snelheid_0_20, seq)  // CMD_2A — lead time + speed (schema + Run mode)
+chihiros::stir_timer(channel, hour, minute, duration_sec, seq)    // STIR_TIMER mode 3 — daily clock schedule
+chihiros::stir_apply(seq)                          // STIR_APPLY — save config to device
 chihiros::next_seq(uint8_t& counter)   // skips 0x5a — required for WRGB2
 ```
 
