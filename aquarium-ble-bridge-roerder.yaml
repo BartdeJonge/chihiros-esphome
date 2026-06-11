@@ -1,13 +1,18 @@
 # --- MAGNETISCH ROERDER ---
 #
 # De Chihiros magnetische roerder heeft 4 onafhankelijke kanalen (0-3).
-# Elk kanaal heeft een snelheid (0-100%), een aan-tijd (minuten) en een interval (minuten).
+# Elk kanaal heeft:
+#   - snelheid (0-20, app-schaal) → CMD_2A byte[3]
+#   - voorlooptijd (seconden) → CMD_2A byte[2]: roerder start X sec vóór begintijd
+#   - begintijd (uur + minuut) → STIR_TIMER mode 3 byte[2/3]
+#   - duur (seconden) → STIR_TIMER mode 3 byte[5]
+#   - weekdays → STIR_SPEED byte[1], altijd 0x7f (elke dag)
 #
 # Verbindingsvolgorde bij elke BLE-connect:
 #   1. Auth       — meldt ons aan bij het apparaat
 #   2. RTC sync   — synchroniseert de interne klok van de roerder
-#   3. Config     — stuurt snelheid + timer per kanaal, gevolgd door "apply"
-#   4. Staat      — herstelt welke kanalen aan/uit moeten staan
+#   3. Config     — STIR_ENABLE + STIR_SPEED(weekdays) + CMD_2A + STIR_TIMER per kanaal → APPLY
+#   4. Staat      — herstelt welke kanalen aan/uit moeten staan (STIR_TOGGLE)
 #
 # Waarom globals voor aan/uit staat?
 #   De ESP32 crasht regelmatig door BLE-stack druk (meerdere clients + scanner).
@@ -106,38 +111,51 @@ script:
           then:
             - switch.turn_on: roerder_verbinding
 
-  # Stuurt drie writes per kanaal: activeren, snelheid, timer
+  # Stuurt 4 writes per kanaal: weekdays, CMD_2A, timer, activeren
   - id: stuur_kanaal_config
     parameters:
       kanaal: int
     then:
-      # Meldt het kanaal aan bij het apparaat
+      # Kanaal activeren
       - ble_client.ble_write:
           id: chihiros_roerder
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda return chihiros::stir_enable((uint8_t)kanaal, id(cmd_seq_roerder)++);
       - delay: 100ms
-      # Weekdays: STIR_SPEED byte[1] = weekdays bitmask (0x7f = elke dag)
-      # Bevestigd btsnoop 2026-06-11: byte[1] is GEEN snelheid maar dagbitmask
+      # Weekdays: altijd 0x7f (elke dag) — STIR_SPEED byte[1] = weekdays bitmask
       - ble_client.ble_write:
           id: chihiros_roerder
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda return chihiros::stir_weekdays((uint8_t)kanaal, 0x7f, id(cmd_seq_roerder)++);
       - delay: 100ms
-      # Schema snelheid + voorlooptijd via CMD_2A (bevestigd btsnoop 2026-06-11)
-      # snelheid 0-20 (app-schaal), voorloop in seconden
+      # CMD_2A: voorlooptijd (sec) + snelheid (0-20) — snelheid zowel schema als Run
       - ble_client.ble_write:
           id: chihiros_roerder
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
           value: !lambda |-
-            uint8_t spd[] = {(uint8_t)id(roerder_k0_snelheid).state, (uint8_t)id(roerder_k1_snelheid).state,
-                             (uint8_t)id(roerder_k2_snelheid).state, (uint8_t)id(roerder_k3_snelheid).state};
-            return chihiros::stir_schema((uint8_t)kanaal, 0, spd[kanaal], id(cmd_seq_roerder)++);
+            uint8_t spd[]  = {(uint8_t)id(roerder_k0_snelheid).state,  (uint8_t)id(roerder_k1_snelheid).state,
+                              (uint8_t)id(roerder_k2_snelheid).state,  (uint8_t)id(roerder_k3_snelheid).state};
+            uint8_t vrlp[] = {(uint8_t)id(roerder_k0_voorloop).state,  (uint8_t)id(roerder_k1_voorloop).state,
+                              (uint8_t)id(roerder_k2_voorloop).state,  (uint8_t)id(roerder_k3_voorloop).state};
+            return chihiros::stir_schema((uint8_t)kanaal, vrlp[kanaal], spd[kanaal], id(cmd_seq_roerder)++);
       - delay: 100ms
-      # TODO: STIR_TIMER mode 3 (uur/minuut/duur) toevoegen zodra start-tijd entiteiten bestaan
+      # STIR_TIMER mode 3: dagelijks klokschema op begintijd, duur in seconden
+      - ble_client.ble_write:
+          id: chihiros_roerder
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda |-
+            uint8_t uur[]  = {(uint8_t)id(roerder_k0_start_uur).state,  (uint8_t)id(roerder_k1_start_uur).state,
+                              (uint8_t)id(roerder_k2_start_uur).state,  (uint8_t)id(roerder_k3_start_uur).state};
+            uint8_t min[]  = {(uint8_t)id(roerder_k0_start_min).state,  (uint8_t)id(roerder_k1_start_min).state,
+                              (uint8_t)id(roerder_k2_start_min).state,  (uint8_t)id(roerder_k3_start_min).state};
+            uint8_t dur[]  = {(uint8_t)id(roerder_k0_duur).state,       (uint8_t)id(roerder_k1_duur).state,
+                              (uint8_t)id(roerder_k2_duur).state,        (uint8_t)id(roerder_k3_duur).state};
+            return chihiros::stir_timer((uint8_t)kanaal, uur[kanaal], min[kanaal], dur[kanaal], id(cmd_seq_roerder)++);
+      - delay: 100ms
 
   # Herstel welke kanalen aan/uit staan — alle 4 in één write (0xff = niet aanraken)
   - id: herstel_roerder_staat
@@ -275,6 +293,7 @@ button:
       - script.execute: roerder_verbind_als_klaar
 
 number:
+  # --- Kanaal 0 ---
   - platform: template
     id: roerder_k0_snelheid
     name: "Roerder kanaal 0 snelheid"
@@ -287,21 +306,9 @@ number:
     icon: mdi:speedometer
 
   - platform: template
-    id: roerder_k0_duur
-    name: "Roerder kanaal 0 duur"
-    min_value: 1
-    max_value: 120
-    step: 1
-    initial_value: 13
-    restore_value: true
-    optimistic: true
-    unit_of_measurement: "s"
-    icon: mdi:timer
-
-  - platform: template
-    id: roerder_k0_interval
+    id: roerder_k0_voorloop
     name: "Roerder kanaal 0 voorlooptijd"
-    min_value: 1
+    min_value: 0
     max_value: 240
     step: 1
     initial_value: 30
@@ -310,6 +317,43 @@ number:
     unit_of_measurement: "s"
     icon: mdi:timer-outline
 
+  - platform: template
+    id: roerder_k0_start_uur
+    name: "Roerder kanaal 0 start uur"
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 8
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "h"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k0_start_min
+    name: "Roerder kanaal 0 start minuut"
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "min"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k0_duur
+    name: "Roerder kanaal 0 duur"
+    min_value: 1
+    max_value: 240
+    step: 1
+    initial_value: 13
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "s"
+    icon: mdi:timer
+
+  # --- Kanaal 1 ---
   - platform: template
     id: roerder_k1_snelheid
     name: "Roerder kanaal 1 snelheid"
@@ -322,21 +366,9 @@ number:
     icon: mdi:speedometer
 
   - platform: template
-    id: roerder_k1_duur
-    name: "Roerder kanaal 1 duur"
-    min_value: 1
-    max_value: 120
-    step: 1
-    initial_value: 13
-    restore_value: true
-    optimistic: true
-    unit_of_measurement: "s"
-    icon: mdi:timer
-
-  - platform: template
-    id: roerder_k1_interval
+    id: roerder_k1_voorloop
     name: "Roerder kanaal 1 voorlooptijd"
-    min_value: 1
+    min_value: 0
     max_value: 240
     step: 1
     initial_value: 50
@@ -345,6 +377,43 @@ number:
     unit_of_measurement: "s"
     icon: mdi:timer-outline
 
+  - platform: template
+    id: roerder_k1_start_uur
+    name: "Roerder kanaal 1 start uur"
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 8
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "h"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k1_start_min
+    name: "Roerder kanaal 1 start minuut"
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "min"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k1_duur
+    name: "Roerder kanaal 1 duur"
+    min_value: 1
+    max_value: 240
+    step: 1
+    initial_value: 13
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "s"
+    icon: mdi:timer
+
+  # --- Kanaal 2 ---
   - platform: template
     id: roerder_k2_snelheid
     name: "Roerder kanaal 2 snelheid"
@@ -357,21 +426,9 @@ number:
     icon: mdi:speedometer
 
   - platform: template
-    id: roerder_k2_duur
-    name: "Roerder kanaal 2 duur"
-    min_value: 1
-    max_value: 120
-    step: 1
-    initial_value: 13
-    restore_value: true
-    optimistic: true
-    unit_of_measurement: "s"
-    icon: mdi:timer
-
-  - platform: template
-    id: roerder_k2_interval
+    id: roerder_k2_voorloop
     name: "Roerder kanaal 2 voorlooptijd"
-    min_value: 1
+    min_value: 0
     max_value: 240
     step: 1
     initial_value: 30
@@ -380,6 +437,43 @@ number:
     unit_of_measurement: "s"
     icon: mdi:timer-outline
 
+  - platform: template
+    id: roerder_k2_start_uur
+    name: "Roerder kanaal 2 start uur"
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 8
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "h"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k2_start_min
+    name: "Roerder kanaal 2 start minuut"
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "min"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k2_duur
+    name: "Roerder kanaal 2 duur"
+    min_value: 1
+    max_value: 240
+    step: 1
+    initial_value: 13
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "s"
+    icon: mdi:timer
+
+  # --- Kanaal 3 ---
   - platform: template
     id: roerder_k3_snelheid
     name: "Roerder kanaal 3 snelheid"
@@ -392,21 +486,9 @@ number:
     icon: mdi:speedometer
 
   - platform: template
-    id: roerder_k3_duur
-    name: "Roerder kanaal 3 duur"
-    min_value: 1
-    max_value: 120
-    step: 1
-    initial_value: 13
-    restore_value: true
-    optimistic: true
-    unit_of_measurement: "s"
-    icon: mdi:timer
-
-  - platform: template
-    id: roerder_k3_interval
+    id: roerder_k3_voorloop
     name: "Roerder kanaal 3 voorlooptijd"
-    min_value: 1
+    min_value: 0
     max_value: 240
     step: 1
     initial_value: 35
@@ -414,3 +496,39 @@ number:
     optimistic: true
     unit_of_measurement: "s"
     icon: mdi:timer-outline
+
+  - platform: template
+    id: roerder_k3_start_uur
+    name: "Roerder kanaal 3 start uur"
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 8
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "h"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k3_start_min
+    name: "Roerder kanaal 3 start minuut"
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "min"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k3_duur
+    name: "Roerder kanaal 3 duur"
+    min_value: 1
+    max_value: 240
+    step: 1
+    initial_value: 13
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "s"
+    icon: mdi:timer
