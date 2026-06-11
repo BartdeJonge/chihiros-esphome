@@ -31,6 +31,7 @@ namespace cmd {
   constexpr uint8_t STIR_SPEED  = 0x1b;
   constexpr uint8_t STIR_ENABLE = 0x20;
   constexpr uint8_t STIR_APPLY  = 0x1f;
+  constexpr uint8_t CMD_2A      = 0x2a;  // stirrer: lead time + speed (schema + Run mode)
   constexpr uint8_t TEMP_THRESH = 0x21;
 }
 
