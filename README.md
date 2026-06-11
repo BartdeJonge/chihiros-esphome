@@ -328,7 +328,7 @@ Channel on/off state is stored in NVS globals (`restore_value: true`) so after a
 | byte[1] | Mode | byte[2] | byte[3] | byte[5] |
 |---|---|---|---|---|
 | `0x00` | Duration/interval | duration (s) | interval (s) | — |
-| `0x03` | Daily clock schedule | hour (0–23) | minute (0–59) | duration (min) |
+| `0x03` | Daily clock schedule | hour (0–23) | minute (0–59) | duration (seconds) |
 
 The Chihiros app uses mode `0x03` (clock schedule) in the Schema tab. Mode `0x00` can be used for a run-for-N-seconds-every-M-seconds pattern.
 
@@ -339,6 +339,8 @@ CMD_2A: [channel, 0x00, voorlooptijd_sec, snelheid_0-20]
 ```
 
 Verified from btsnoop 2026-06-11: ch=2, voorlooptijd=36s, speed=20 → `02 00 24 14`; same channel, speed=2 → `02 00 24 02`.
+
+STIR_TIMER mode 3 verified 2026-06-11: ch=2, start=20:33, duration=150s → `02 03 14 21 00 96`. Duration in seconds (0x5a=90s also observed).
 
 <details>
 <summary>Wire examples — connect (ch0 speed=12/20, 13s on / 30s interval) + CMD_2A + real-time toggle</summary>
