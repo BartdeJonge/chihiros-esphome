@@ -324,6 +324,8 @@ Channel on/off state is stored in NVS globals (`restore_value: true`) so after a
 | Lead time | Voorlooptijd | 0–255 | seconds | `CMD_2A` byte[2] | raw byte |
 | Speed | Snelheid | 0–20 | — | `CMD_2A` byte[3] | raw byte (app scale 0–20) |
 
+> **Note:** `STIR_SPEED` (0x1b) is **never** a speed command. Speed in both schema and Run mode uses `CMD_2A`. Confirmed btsnoop 2026-06-11: Run mode speed=10 → `CMD_2A 03 00 00 0a` (ch=3, voorloop=0, speed=10).
+
 **STIR_TIMER has two modes** (determined by byte[1]):
 
 | byte[1] | Mode | byte[2] | byte[3] | byte[5] |

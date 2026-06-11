@@ -160,10 +160,10 @@ inline std::vector<uint8_t> fan_temp_thresh(uint8_t start_c, uint8_t max_c, uint
 inline std::vector<uint8_t> stir_enable(uint8_t channel, uint8_t seq) {
     return pakket(hdr::DEVICE, cmd::STIR_ENABLE, {channel, 0x00, 0x01}, seq);
 }
-// Schema weekdays: which days the autonomous schedule runs.
-// Confirmed from btsnoop 2026-06-11: byte[1] = weekdays bitmask (same encoding as WRGB2/dosing).
+// Weekdays for the autonomous schedule. byte[1] = bitmask (same encoding as WRGB2/dosing):
 // Ma=64 Di=32 Wo=16 Do=8 Vr=4 Za=2 Zo=1 — every day = 0x7f (127).
-// NOT a speed command — actual stirring speed is in stir_schema() (CMD_2A).
+// Confirmed btsnoop 2026-06-11 (schema + Run): STIR_SPEED (0x1b) is NEVER a speed command.
+// Speed (both schema and Run mode) always uses CMD_2A via stir_schema().
 inline std::vector<uint8_t> stir_weekdays(uint8_t channel, uint8_t weekdays, uint8_t seq) {
     return pakket(hdr::DEVICE, cmd::STIR_SPEED, {channel, weekdays, 0x01, 0x00, 0x00, 0x00}, seq);
 }
@@ -187,12 +187,8 @@ inline std::vector<uint8_t> stir_restore(uint8_t k0, uint8_t k1, uint8_t k2, uin
         {data::SKIP, data::SKIP, k0, k1, k2, k3, data::SKIP, data::SKIP, data::SKIP, data::SKIP}, seq);
 }
 
-// Raw STIR_SPEED (0x1b) send — byte[1] meaning depends on context:
-//   schema context (confirmed btsnoop 2026-06-11): byte[1] = weekdays bitmask (use stir_weekdays instead)
-//   direct BLE control: possibly speed 0-127 (unconfirmed — no btsnoop capture in Run mode)
-inline std::vector<uint8_t> stir_speed(uint8_t channel, uint8_t byte1, uint8_t seq) {
-    return pakket(hdr::DEVICE, cmd::STIR_SPEED, {channel, byte1, 0x01, 0x00, 0x00, 0x00}, seq);
-}
+// Confirmed btsnoop 2026-06-11 (Run mode speed=10): speed in Run mode also uses CMD_2A,
+// not STIR_SPEED. STIR_SPEED (0x1b) is exclusively a weekdays bitmask command — use stir_weekdays().
 
 // ── WRGB2 ─────────────────────────────────────────────────────────────────────
 
