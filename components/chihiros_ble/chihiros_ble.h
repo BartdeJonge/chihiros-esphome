@@ -166,6 +166,12 @@ inline std::vector<uint8_t> stir_speed(uint8_t channel, uint8_t speed_0_127, uin
 inline std::vector<uint8_t> stir_timer(uint8_t channel, uint8_t duration, uint8_t interval, uint8_t seq) {
     return pakket(hdr::DEVICE, cmd::STIR_TIMER, {channel, 0x00, duration, interval, 0x00, 0x00}, seq);
 }
+// Persistent schema settings per channel: lead time (seconds) + speed (0-20 app scale).
+// Confirmed from btsnoop 2026-06-11: ch2 voorloop=36s speed=20 → 02002414, speed=2 → 02002402.
+inline std::vector<uint8_t> stir_schema(uint8_t channel, uint8_t voorloop_sec, uint8_t snelheid_0_20, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::CMD_2A, {channel, 0x00, voorloop_sec, snelheid_0_20}, seq);
+}
+
 inline std::vector<uint8_t> stir_apply(uint8_t seq) {
     return pakket(hdr::DEVICE, cmd::STIR_APPLY, {0x00}, seq);
 }

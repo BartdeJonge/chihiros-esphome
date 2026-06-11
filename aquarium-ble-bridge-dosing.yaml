@@ -41,7 +41,10 @@ ble_client:
             characteristic_uuid: ${ble_tx}
             value: !lambda return chihiros::auth(id(cmd_seq_dosing)++);
         - delay: 200ms
-        - logger.log: "dosing: RTC 1"
+        - lambda: |-
+            auto t = id(ha_time).now();
+            ESP_LOGI("dosing", "RTC 1 → %04d-%02d-%02d %02d:%02d:%02d (DOW=%d)",
+                     t.year, t.month, t.day_of_month, t.hour, t.minute, t.second, t.day_of_week);
         - ble_client.ble_write:
             id: chihiros_dosing
             service_uuid: ${ble_service}
@@ -295,9 +298,9 @@ number:
   - platform: template
     name: "Dosing pomp 1 volume"
     id: num_dosing_vol_p1
-    min_value: 0.1
+    min_value: 0.5
     max_value: 25.5
-    step: 0.1
+    step: 0.5
     initial_value: 1.0
     restore_value: true
     unit_of_measurement: "mL"
@@ -312,9 +315,9 @@ number:
   - platform: template
     name: "Dosing pomp 2 volume"
     id: num_dosing_vol_p2
-    min_value: 0.1
+    min_value: 0.5
     max_value: 25.5
-    step: 0.1
+    step: 0.5
     initial_value: 10.0
     restore_value: true
     unit_of_measurement: "mL"
@@ -329,9 +332,9 @@ number:
   - platform: template
     name: "Dosing pomp 3 volume"
     id: num_dosing_vol_p3
-    min_value: 0.1
+    min_value: 0.5
     max_value: 25.5
-    step: 0.1
+    step: 0.5
     initial_value: 1.0
     restore_value: true
     unit_of_measurement: "mL"
@@ -346,9 +349,9 @@ number:
   - platform: template
     name: "Dosing pomp 4 volume"
     id: num_dosing_vol_p4
-    min_value: 0.1
+    min_value: 0.5
     max_value: 25.5
-    step: 0.1
+    step: 0.5
     initial_value: 1.0
     restore_value: true
     unit_of_measurement: "mL"

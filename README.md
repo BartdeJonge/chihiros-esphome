@@ -187,6 +187,7 @@ chihiros::cmd::STIR_TIMER  // 0x15
 chihiros::cmd::STIR_SPEED  // 0x1b
 chihiros::cmd::STIR_ENABLE // 0x20
 chihiros::cmd::STIR_APPLY  // 0x1f
+chihiros::cmd::CMD_2A      // 0x2a — stirrer persistent schema settings (lead time + speed)
 chihiros::cmd::TEMP_THRESH // 0x21 — fan temperature threshold
 ```
 
@@ -214,6 +215,7 @@ chihiros::pakket(header, cmd, {data...}, seq)
 chihiros::pakket(header, cmd, std::vector<uint8_t>, seq)
 chihiros::rtc_pakket(ESPTime t, seq)
 chihiros::roerder_toggle(seq, channel, on)
+chihiros::stir_schema(channel, voorloop_sec, snelheid_0_20, seq)  // CMD_2A — lead time + speed on 0-20 scale
 chihiros::next_seq(uint8_t& counter)   // skips 0x5a — required for WRGB2
 ```
 
@@ -311,16 +313,35 @@ sequenceDiagram
 
 Channel on/off state is stored in NVS globals (`restore_value: true`) so after an ESP reboot the stirrer returns to the last-known state.
 
-**Parameter ranges (matching Chihiros app):**
+**Parameter ranges:**
 
-| Parameter | App label | Range | Unit | Device encoding |
+| Parameter | App label | Range | Unit | Command | Device encoding |
+|---|---|---|---|---|---|
+| Speed (direct) | Snelheid (direct) | 0–20 | — | `STIR_SPEED` | `speed * 127 / 20` → 0–127 |
+| Duration | Duur | 1–120 | seconds | `STIR_TIMER` byte[2] | raw byte (mode 0: byte[1]=0x00) |
+| Interval | Interval | 1–120 | seconds | `STIR_TIMER` byte[3] | raw byte (mode 0) |
+| Lead time | Voorlooptijd | 0–255 | seconds | `CMD_2A` byte[2] | raw byte |
+| Speed (schema) | Snelheid (schema) | 0–20 | — | `CMD_2A` byte[3] | raw byte |
+
+**STIR_TIMER has two modes** (determined by byte[1]):
+
+| byte[1] | Mode | byte[2] | byte[3] | byte[5] |
 |---|---|---|---|---|
-| Speed | Snelheid | 0–20 | — | `speed * 127 / 20` → 0–127 |
-| Duration | Duur | 1–120 | seconds | raw byte |
-| Lead time | Voorlooptijd | 1–240 | seconds | raw byte |
+| `0x00` | Duration/interval | duration (s) | interval (s) | — |
+| `0x03` | Daily clock schedule | hour (0–23) | minute (0–59) | duration (min) |
+
+The Chihiros app uses mode `0x03` (clock schedule) in the Schema tab. Mode `0x00` can be used for a run-for-N-seconds-every-M-seconds pattern.
+
+**CMD_2A** saves the lead time and speed persistently per channel (survives power cycles):
+
+```
+CMD_2A: [channel, 0x00, voorlooptijd_sec, snelheid_0-20]
+```
+
+Verified from btsnoop 2026-06-11: ch=2, voorlooptijd=36s, speed=20 → `02 00 24 14`; same channel, speed=2 → `02 00 24 02`.
 
 <details>
-<summary>Wire examples — connect (ch0 speed=12/20, 13s on / 30s lead time) + real-time toggle</summary>
+<summary>Wire examples — connect (ch0 speed=12/20, 13s on / 30s interval) + CMD_2A + real-time toggle</summary>
 
 ```
 Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
@@ -330,9 +351,16 @@ Connect sequence:
 2. rtc              5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
 3. stir_enable ch0  a5 01 08 00 03 20 00 00 01 2b
 4. stir_speed  ch0  a5 01 0b 00 04 1b 00 4c 01 00 00 00 58   speed=76/127 (≈12/20)
-5. stir_timer  ch0  a5 01 0b 00 05 15 00 00 0d 1e 00 00 01   13s on, 30s lead time
+5. stir_timer  ch0  a5 01 0b 00 05 15 00 00 0d 1e 00 00 01   mode 0: 13s on, 30s interval
 6. stir_apply       a5 01 06 00 06 1f 00 1e
 7. stir_restore     a5 01 0f 00 07 14 ff ff 01 01 01 01 ff ff ff ff 1d   all 4 channels on
+
+CMD_2A — persistent schema settings (lead time + speed on 0-20 scale):
+ch2 voorloop=36s speed=20  a5 01 09 00 08 2a 02 00 24 14 0d
+ch2 voorloop=36s speed=2   a5 01 09 00 09 2a 02 00 24 02 1b
+                                              ^^ channel (0-indexed)
+                                                    ^^ voorlooptijd (seconds)
+                                                       ^^ snelheid (0-20 app scale)
 
 Real-time toggle (STIR_TOGGLE — only target channel, rest 0xff = SKIP):
 toggle ch0 ON   a5 01 0f 00 01 14 ff ff 01 ff ff ff ff ff ff ff e5
