@@ -146,6 +146,7 @@ This connect → configure → disconnect pattern is expected and correct.
 - **Framework**: `esp-idf` (required for reliable multi-client BLE)
 - **BLE connections**: up to 7 (`CONFIG_BT_ACL_CONNECTIONS: "7"`)
 - **BLE scan**: `interval: 320ms`, `window: 60ms`, continuous
+- **Tijd**: SNTP (`platform: sntp`, id `ntp_tijd`) — synchroniseert direct van NTP-servers, geen HA-tussenlaag. Tijdzone: `CET-1CEST-2,M3.5.0/02:00:00,M10.5.0/03:00:00`. `ntp_tijd.now().hour` geeft altijd correcte lokale tijd.
 
 > **BLE 5.0 required.** Chihiros devices use BLE 5.0 extended advertising — a classic ESP32 (BLE 4.2) will not detect them at all. Use an **ESP32-S3** (or ESP32-C3/C6). The S3 is recommended for its extra RAM, which is needed when running the BLE scanner alongside multiple client connections.
 
