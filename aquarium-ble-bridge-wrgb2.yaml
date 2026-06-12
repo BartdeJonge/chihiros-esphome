@@ -52,20 +52,20 @@ ble_client:
               - delay: 200ms
               - if:
                   condition:
-                    lambda: return id(ha_time).now().is_valid();
+                    lambda: return id(ntp_tijd).now().is_valid();
                   then:
                     - logger.log:
                         format: "wrgb2: RTC %04d-%02d-%02d (dow_raw=%d dow_pkt=%d) %02d:%02d:%02d"
-                        args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month",
-                               "id(ha_time).now().day_of_week",
-                               "(id(ha_time).now().day_of_week + 5) % 7 + 1",
-                               "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
+                        args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month",
+                               "id(ntp_tijd).now().day_of_week",
+                               "(id(ntp_tijd).now().day_of_week + 5) % 7 + 1",
+                               "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
                     - ble_client.ble_write:
                         id: chihiros_wrgb2
                         service_uuid: ${ble_service}
                         characteristic_uuid: ${ble_tx}
                         value: !lambda |-
-                          auto pkt = chihiros::rtc_pakket(id(ha_time).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
+                          auto pkt = chihiros::rtc_pakket(id(ntp_tijd).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
                           ESP_LOGI("wrgb2", "RTC bytes: %s", chihiros::hex_dump(pkt).c_str());
                           return pkt;
                     - delay: 200ms
@@ -73,9 +73,9 @@ ble_client:
                         id: chihiros_wrgb2
                         service_uuid: ${ble_service}
                         characteristic_uuid: ${ble_tx}
-                        value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
+                        value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
                   else:
-                    - logger.log: "wrgb2: RTC OVERGESLAGEN — ha_time nog niet gesynchroniseerd"
+                    - logger.log: "wrgb2: RTC OVERGESLAGEN — ntp_tijd nog niet gesynchroniseerd"
               - if:
                   condition:
                     lambda: return id(wrgb2_auto_modus);
@@ -170,7 +170,7 @@ script:
           id: chihiros_wrgb2
           service_uuid: ${ble_service}
           characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
+          value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
 
 switch:
   - platform: ble_client

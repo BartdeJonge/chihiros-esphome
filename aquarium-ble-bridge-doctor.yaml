@@ -55,12 +55,12 @@ ble_client:
               # RTC sync only — geen config
               - logger.log:
                   format: "doctor: RTC sync %04d-%02d-%02d %02d:%02d:%02d"
-                  args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
+                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
               - ble_client.ble_write:
                   id: chihiros_doctor
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_doctor)++);
+                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_doctor)++);
               - delay: 200ms
               - globals.set:
                   id: doctor_rtc_only
@@ -71,12 +71,12 @@ ble_client:
               # Volledige config: RTC → TDS → volume
               - logger.log:
                   format: "doctor: RTC %04d-%02d-%02d %02d:%02d:%02d"
-                  args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
+                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
               - ble_client.ble_write:
                   id: chihiros_doctor
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_doctor)++);
+                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_doctor)++);
               - delay: 200ms
               - script.execute: stuur_doctor_instellingen
               - script.wait: stuur_doctor_instellingen

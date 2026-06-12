@@ -70,12 +70,12 @@ ble_client:
               # RTC sync only — geen config
               - logger.log:
                   format: "roerder: RTC sync %04d-%02d-%02d %02d:%02d:%02d"
-                  args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
+                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
               - ble_client.ble_write:
                   id: chihiros_roerder
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_roerder)++);
+                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_roerder)++);
               - delay: 200ms
               - globals.set:
                   id: roerder_rtc_only
@@ -86,12 +86,12 @@ ble_client:
               # Volledige config: RTC → config per kanaal → staat herstel
               - logger.log:
                   format: "roerder: RTC %04d-%02d-%02d %02d:%02d:%02d"
-                  args: ["id(ha_time).now().year", "id(ha_time).now().month", "id(ha_time).now().day_of_month", "id(ha_time).now().hour", "id(ha_time).now().minute", "id(ha_time).now().second"]
+                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
               - ble_client.ble_write:
                   id: chihiros_roerder
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::rtc_pakket(id(ha_time).now(), id(cmd_seq_roerder)++);
+                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_roerder)++);
               - delay: 200ms
               - script.execute: stuur_roerder_config
               - script.wait: stuur_roerder_config
