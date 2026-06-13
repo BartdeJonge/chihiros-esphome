@@ -45,6 +45,8 @@ sequenceDiagram
     participant Dev as Chihiros Device
 
     HA->>ESP: API connect (boot)
+    Note over ESP: Waits — no auto-connect
+    HA->>ESP: Button press / entity change
     ESP->>Dev: BLE connect
     ESP->>Dev: AUTH + RTC
     ESP->>Dev: Config (schedule / settings)
@@ -55,12 +57,14 @@ sequenceDiagram
 
 | Device | When it connects |
 |---|---|
-| CO2 Controller | On boot + when schedule/times change |
-| WRGB2 Light | On boot + when schedule/colors change |
-| Magnetic Stirrer | On boot + when a channel is toggled or settings change |
-| Doctor Mate | On boot + when TDS/volume settings change |
+| CO2 Controller | When schedule/times change (button or HA entity) |
+| WRGB2 Light | When schedule/colors change (button or HA entity) |
+| Magnetic Stirrer | When "Roerder schema toepassen" button is pressed |
+| Doctor Mate | When TDS/volume settings change |
 | Cooling Fan | **Every 5 minutes** (for temperature readings) + when settings change |
-| Dosing Pump | On boot + when a schedule or manual dose changes |
+| Dosing Pump | When a schedule changes or a manual dose button is pressed |
+
+> **No auto-connect on boot.** Devices only connect via explicit button press or HA entity change. This prevents simultaneous BLE connections that can cause HCI 0x07 (Memory Full) crashes on the ESP32-S3. After a reboot, press each device's "schema toepassen" button to push the current config.
 
 **Benefit**: the BLE scanner is almost always free. Toggling a stirrer channel or pushing a new CO2 schedule typically completes within 2–4 seconds.
 
@@ -124,19 +128,16 @@ docker exec esphome esphome upload /config/aquarium-ble-bridge.yaml
 
 ### Step 5 — Check the logs
 
-After booting, each device connects once, runs its init sequence, and disconnects:
+After booting, no BLE connections are opened automatically. Press each device's "schema toepassen" button to push the current configuration. A successful sync looks like:
 
 ```
-[I][wrgb2]: Auth
-[I][wrgb2]: RTC 2026-06-08 14:23:01
-[I][wrgb2]: schema 08:00→22:00 ramp=30 R=61 G=45 B=80
-[I][wrgb2]: init klaar, verbinding verbroken
-[I][co2]: Auth
-[I][co2]: CO2 schema verstuurd
-[I][co2]: instellingen verstuurd, verbinding verbroken
+[I][co2]: klaar
+[I][co2]: verbinding verbroken
+[I][wrgb2]: klaar
+[I][wrgb2]: verbinding verbroken
 ```
 
-This connect → configure → disconnect pattern is expected and correct.
+This connect → configure → disconnect pattern is expected and correct. Avoid pressing multiple buttons at the same time — simultaneous BLE connections can cause HCI 0x07 (Memory Full) crashes.
 
 ---
 
@@ -144,7 +145,7 @@ This connect → configure → disconnect pattern is expected and correct.
 
 - **Board**: ESP32-S3-N16R8 (`esp32-s3-devkitc-1`, `variant: esp32s3`, `flash_size: 16MB`)
 - **Framework**: `esp-idf` (required for reliable multi-client BLE)
-- **BLE connections**: up to 7 (`CONFIG_BT_ACL_CONNECTIONS: "7"`)
+- **BLE connections**: up to 8 (`max_connections: 8`, `CONFIG_BT_CTRL_BLE_MAX_ACT: "10"`)
 - **BLE scan**: `interval: 320ms`, `window: 60ms`, continuous
 - **Tijd**: SNTP (`platform: sntp`, id `ntp_tijd`) — synchroniseert direct van NTP-servers, geen HA-tussenlaag. Tijdzone: `CET-1CEST-2,M3.5.0/02:00:00,M10.5.0/03:00:00`. `ntp_tijd.now().hour` geeft altijd correcte lokale tijd.
 
@@ -221,10 +222,66 @@ chihiros::stir_weekdays(channel, weekdays, seq)    // STIR_SPEED byte[1] = weekd
 chihiros::stir_schema(channel, voorloop_sec, snelheid_0_20, seq)  // CMD_2A — lead time + speed (schema + Run mode)
 chihiros::stir_timer(channel, hour, minute, duration_sec, seq)    // STIR_TIMER mode 3 — daily clock schedule
 chihiros::stir_apply(seq)                          // STIR_APPLY — save config to device
-chihiros::next_seq(uint8_t& counter)   // skips 0x5a — required for WRGB2
 ```
 
-> The sequence byte must never equal `0x5a` (the frame header). Use `next_seq()` for WRGB2 where the counter runs through an entire session without resetting.
+> The sequence byte must never equal `0x5a` (the frame header). The `CommandQueue` base class (see below) handles this automatically.
+
+---
+
+## Device Library (`chihiros_devices.h`)
+
+All connect-sequences are encapsulated in typed C++ device objects in `chihiros_devices.h`. Each YAML package declares one device object as an ESPHome global and the `on_connect` handler calls `prepare()` once, then drains the queue with a `while` loop.
+
+```yaml
+globals:
+  - id: co2_device
+    type: chihiros::CO2Device
+    restore_value: false
+
+on_connect:
+  - delay: 500ms
+  - lambda: |-
+      id(co2_device).prepare(
+        id(ntp_tijd).now(), id(co2_schema_actief),
+        id(fotoperiode_start).hour, id(fotoperiode_start).minute,
+        id(fotoperiode_eind).hour,  id(fotoperiode_eind).minute,
+        (int)id(co2_prestart).state
+      );
+  - while:
+      condition:
+        lambda: return id(co2_device).has_next();
+      then:
+        - ble_client.ble_write:
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return id(co2_device).next();
+        - delay: 200ms
+  - switch.turn_off: co2_verbinding
+```
+
+### Device classes
+
+| Class | `prepare()` parameters |
+|---|---|
+| `CO2Device` | `time, schema_actief, fp_uur, fp_min, eind_uur, eind_min, prestart_min` |
+| `VentilatorDevice` | `time, silent_mode, start_temp, max_temp, speed` |
+| `DoctorDevice` | `time, tds_ppm, volume_l` |
+| `WRGB2Device` | `time, auto_modus, fp_start_h, fp_start_m, fp_eind_h, fp_eind_m, ramp_min, r, g, b` |
+| `DosingDevice` | `time, actief[4], weekdays[4], uur[4], min[4], vol[4]` |
+| `RoerderDevice` | `time, uur[4], min[4], vrlp[4], spd[4], dur[4], k0, k1, k2, k3` |
+
+### Special flags
+
+```cpp
+device.set_rtc_only();                   // next prepare() sends only auth + RTC
+dosing_device.set_manual_dose(pump, vol); // next prepare() sends a single manual dose
+```
+
+Set the flag, then trigger the connection script. `prepare()` clears the flag after use.
+
+### NTP guard
+
+All `prepare()` methods accept an `esphome::ESPTime`. If `!time.is_valid()` (NTP not yet synced), the RTC write is skipped. Sequence counters are per-object, reset to 1 on each `prepare()` call, and automatically skip `0x5a`.
 
 ---
 
