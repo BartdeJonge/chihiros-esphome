@@ -79,6 +79,12 @@ script:
           then:
             - switch.turn_on: wrgb2_verbinding
 
+  - id: wrgb2_debounce_manueel
+    mode: restart
+    then:
+      - delay: 1500ms
+      - script.execute: wrgb2_verbind_als_klaar_manueel
+
 
 switch:
   - platform: ble_client
@@ -117,7 +123,7 @@ number:
     unit_of_measurement: "%"
     optimistic: true
     on_value:
-      - script.execute: wrgb2_verbind_als_klaar_manueel
+      - script.execute: wrgb2_debounce_manueel
 
   - platform: template
     name: "WRGB2 groen"
@@ -131,7 +137,7 @@ number:
     unit_of_measurement: "%"
     optimistic: true
     on_value:
-      - script.execute: wrgb2_verbind_als_klaar_manueel
+      - script.execute: wrgb2_debounce_manueel
 
   - platform: template
     name: "WRGB2 blauw"
@@ -145,7 +151,7 @@ number:
     unit_of_measurement: "%"
     optimistic: true
     on_value:
-      - script.execute: wrgb2_verbind_als_klaar_manueel
+      - script.execute: wrgb2_debounce_manueel
 
   - platform: template
     name: "WRGB2 schema ramp"

@@ -6,8 +6,25 @@
 #   WRGB2 aan: fotoperiode_start
 #   WRGB2 uit: fotoperiode_eind
 #
-# Wijziging in één van de drie entiteiten triggert automatisch een BLE-update
-# naar CO2 en/of WRGB2.
+# Wijziging triggert schema_debounce_beide (CO2 eerst, WRGB2 na 3s).
+# Gespreide verbinding voorkomt gelijktijdige BLE-connects (HCI 0x07).
+
+script:
+  # Beide devices bijwerken — gespreide verbinding
+  - id: schema_debounce_beide
+    mode: restart
+    then:
+      - delay: 1500ms
+      - script.execute: co2_verbind_als_klaar
+      - delay: 3000ms
+      - script.execute: wrgb2_verbind_als_klaar
+
+  # Alleen CO2 bijwerken (co2_prestart wijziging)
+  - id: schema_debounce_co2
+    mode: restart
+    then:
+      - delay: 1500ms
+      - script.execute: co2_verbind_als_klaar
 
 datetime:
   - platform: template
@@ -19,13 +36,7 @@ datetime:
     initial_value: "14:00:00"
     icon: mdi:weather-sunset-up
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(ha_verbonden);
-            then:
-              - switch.turn_on: co2_verbinding
-              - switch.turn_on: wrgb2_verbinding
+      - script.execute: schema_debounce_beide
 
   - platform: template
     id: fotoperiode_eind
@@ -36,13 +47,7 @@ datetime:
     initial_value: "21:00:00"
     icon: mdi:weather-sunset-down
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(ha_verbonden);
-            then:
-              - switch.turn_on: co2_verbinding
-              - switch.turn_on: wrgb2_verbinding
+      - script.execute: schema_debounce_beide
 
 number:
   - platform: template
@@ -57,9 +62,4 @@ number:
     unit_of_measurement: "min"
     icon: mdi:clock-minus
     on_value:
-      then:
-        - if:
-            condition:
-              lambda: return id(ha_verbonden);
-            then:
-              - switch.turn_on: co2_verbinding
+      - script.execute: schema_debounce_co2
