@@ -20,15 +20,14 @@
 # Ramp-waarde 90 min is ook verboden → wordt 89 min afgerond.
 
 globals:
-  - id: cmd_seq_wrgb2
-    type: uint8_t
-    restore_value: false
-    initial_value: '1'
-
   - id: wrgb2_auto_modus
     type: bool
     restore_value: false
     initial_value: 'true'
+
+  - id: wrgb2_device
+    type: chihiros::WRGB2Device
+    restore_value: false
 
 ble_client:
   - mac_address: ${wrgb2_mac}
@@ -36,57 +35,28 @@ ble_client:
     on_connect:
       then:
         - delay: 500ms
-        - if:
+        - lambda: |-
+            id(wrgb2_device).prepare(
+              id(ntp_tijd).now(), id(wrgb2_auto_modus),
+              id(fotoperiode_start).hour, id(fotoperiode_start).minute,
+              id(fotoperiode_eind).hour,  id(fotoperiode_eind).minute,
+              (uint8_t)id(wrgb2_ramp).state,
+              (uint8_t)id(wrgb2_schema_rood).state,
+              (uint8_t)id(wrgb2_schema_groen).state,
+              (uint8_t)id(wrgb2_schema_blauw).state
+            );
+        - while:
             condition:
-              lambda: return !id(ha_verbonden);
+              lambda: return id(wrgb2_device).has_next();
             then:
-              - logger.log: "wrgb2: HA nog niet verbonden, verbinding verbroken"
-              - switch.turn_off: wrgb2_verbinding
-            else:
-              - logger.log: "wrgb2: Auth"
               - ble_client.ble_write:
                   id: chihiros_wrgb2
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::auth(chihiros::next_seq(id(cmd_seq_wrgb2)));
+                  value: !lambda return id(wrgb2_device).next();
               - delay: 200ms
-              - if:
-                  condition:
-                    lambda: return id(ntp_tijd).now().is_valid();
-                  then:
-                    - logger.log:
-                        format: "wrgb2: RTC %04d-%02d-%02d (dow_raw=%d dow_pkt=%d) %02d:%02d:%02d"
-                        args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month",
-                               "id(ntp_tijd).now().day_of_week",
-                               "(id(ntp_tijd).now().day_of_week + 5) % 7 + 1",
-                               "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
-                    - ble_client.ble_write:
-                        id: chihiros_wrgb2
-                        service_uuid: ${ble_service}
-                        characteristic_uuid: ${ble_tx}
-                        value: !lambda |-
-                          auto pkt = chihiros::rtc_pakket(id(ntp_tijd).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
-                          ESP_LOGI("wrgb2", "RTC bytes: %s", chihiros::hex_dump(pkt).c_str());
-                          return pkt;
-                    - delay: 200ms
-                    - ble_client.ble_write:
-                        id: chihiros_wrgb2
-                        service_uuid: ${ble_service}
-                        characteristic_uuid: ${ble_tx}
-                        value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
-                  else:
-                    - logger.log: "wrgb2: RTC OVERGESLAGEN — ntp_tijd nog niet gesynchroniseerd"
-              - if:
-                  condition:
-                    lambda: return id(wrgb2_auto_modus);
-                  then:
-                    - script.execute: stuur_wrgb2_schema
-                    - script.wait: stuur_wrgb2_schema
-                  else:
-                    - script.execute: stuur_wrgb2_brightness
-                    - script.wait: stuur_wrgb2_brightness
-              - switch.turn_off: wrgb2_verbinding
-              - logger.log: "wrgb2: init klaar, verbinding verbroken"
+        - switch.turn_off: wrgb2_verbinding
+        - logger.log: "wrgb2: klaar"
     on_disconnect:
       then:
         - logger.log: "wrgb2: verbinding verbroken"
@@ -109,68 +79,6 @@ script:
           then:
             - switch.turn_on: wrgb2_verbinding
 
-  # Stuurt helderheid per kanaal (R, G, B) — lamp past direct aan
-  - id: stuur_wrgb2_brightness
-    then:
-      - logger.log:
-          format: "wrgb2: brightness R=%d G=%d B=%d"
-          args: ["(int)id(num_wrgb2_r).state", "(int)id(num_wrgb2_g).state", "(int)id(num_wrgb2_b).state"]
-      - ble_client.ble_write:  # kanaal R (0)
-          id: chihiros_wrgb2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::wrgb_channel(chihiros::data::WRGB_R, (uint8_t)id(num_wrgb2_r).state, chihiros::next_seq(id(cmd_seq_wrgb2)));
-      - delay: 100ms
-      - ble_client.ble_write:  # kanaal G (1)
-          id: chihiros_wrgb2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::wrgb_channel(chihiros::data::WRGB_G, (uint8_t)id(num_wrgb2_g).state, chihiros::next_seq(id(cmd_seq_wrgb2)));
-      - delay: 100ms
-      - ble_client.ble_write:  # kanaal B (2)
-          id: chihiros_wrgb2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::wrgb_channel(chihiros::data::WRGB_B, (uint8_t)id(num_wrgb2_b).state, chihiros::next_seq(id(cmd_seq_wrgb2)));
-
-  # Stuurt dagschema naar lamp: reset → nieuw schema → auto modus → RTC
-  # Na de laatste RTC evalueert de lamp het schema direct op het huidige tijdstip
-  - id: stuur_wrgb2_schema
-    then:
-      # Wis bestaand schema zodat we een schone lei hebben
-      - logger.log: "wrgb2: schema reset"
-      - ble_client.ble_write:
-          id: chihiros_wrgb2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::reset_schema(chihiros::next_seq(id(cmd_seq_wrgb2)));
-      - delay: 200ms
-      # Voeg schema toe: aan-tijd, uit-tijd, ramp (fade-tijd), weekdays=127 (elke dag), RGB
-      # Ramp-waarde 90 is verboden (= 0x5a = frame-header) — wordt 89
-      - logger.log:
-          format: "wrgb2: schema %02d:%02d→%02d:%02d ramp=%d R=%d G=%d B=%d"
-          args: ["id(fotoperiode_start).hour", "id(fotoperiode_start).minute", "id(fotoperiode_eind).hour", "id(fotoperiode_eind).minute", "(int)id(wrgb2_ramp).state", "(int)id(wrgb2_schema_rood).state", "(int)id(wrgb2_schema_groen).state", "(int)id(wrgb2_schema_blauw).state"]
-      - ble_client.ble_write:
-          id: chihiros_wrgb2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            return chihiros::wrgb_schedule(id(fotoperiode_start).hour, id(fotoperiode_start).minute, id(fotoperiode_eind).hour, id(fotoperiode_eind).minute, chihiros::wrgb2_ramp_veilig((uint8_t)id(wrgb2_ramp).state), 127, (uint8_t)id(wrgb2_schema_rood).state, (uint8_t)id(wrgb2_schema_groen).state, (uint8_t)id(wrgb2_schema_blauw).state, chihiros::next_seq(id(cmd_seq_wrgb2)));
-      - delay: 200ms
-      # Zet lamp in auto modus — volgt voortaan het schema
-      - logger.log: "wrgb2: auto modus activeren"
-      - ble_client.ble_write:
-          id: chihiros_wrgb2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::reset_auto(chihiros::next_seq(id(cmd_seq_wrgb2)));
-      - delay: 200ms
-      # Laatste RTC triggert schema-evaluatie — lamp zet zichzelf direct op de juiste stand
-      - ble_client.ble_write:
-          id: chihiros_wrgb2
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), chihiros::next_seq(id(cmd_seq_wrgb2)));
 
 switch:
   - platform: ble_client
@@ -300,6 +208,7 @@ button:
     id: btn_wrgb2_rtc_sync
     icon: mdi:clock-sync
     on_press:
+      - lambda: id(wrgb2_device).set_rtc_only();
       - script.execute: wrgb2_verbind_als_klaar
 
 sensor:

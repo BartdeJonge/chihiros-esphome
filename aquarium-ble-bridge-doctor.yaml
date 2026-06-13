@@ -24,15 +24,9 @@
 #   byte[5] = EC meting (µS/cm) — vermoedelijk, bevestig via logs
 
 globals:
-  - id: cmd_seq_doctor
-    type: uint8_t
+  - id: doctor_device
+    type: chihiros::DoctorDevice
     restore_value: false
-    initial_value: '1'
-
-  - id: doctor_rtc_only
-    type: bool
-    restore_value: false
-    initial_value: 'false'
 
 ble_client:
   - mac_address: ${doctor_mac}
@@ -40,49 +34,24 @@ ble_client:
     on_connect:
       then:
         - delay: 500ms
-        # Doctor gebruikt 0xa5 (DEVICE) voor auth, niet de standaard 0x5a
-        - logger.log: "doctor: Auth"
-        - ble_client.ble_write:
-            id: chihiros_doctor
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda return chihiros::auth_device(id(cmd_seq_doctor)++);
-        - delay: 200ms
-        - if:
+        - lambda: |-
+            id(doctor_device).prepare(
+              id(ntp_tijd).now(),
+              id(num_doctor_tds).state,
+              id(num_doctor_volume).state
+            );
+        - while:
             condition:
-              lambda: return id(doctor_rtc_only);
+              lambda: return id(doctor_device).has_next();
             then:
-              # RTC sync only — geen config
-              - logger.log:
-                  format: "doctor: RTC sync %04d-%02d-%02d %02d:%02d:%02d"
-                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
               - ble_client.ble_write:
                   id: chihiros_doctor
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_doctor)++);
+                  value: !lambda return id(doctor_device).next();
               - delay: 200ms
-              - globals.set:
-                  id: doctor_rtc_only
-                  value: 'false'
-              - switch.turn_off: doctor_verbinding
-              - logger.log: "doctor: RTC sync klaar"
-            else:
-              # Volledige config: RTC → TDS → volume
-              - logger.log:
-                  format: "doctor: RTC %04d-%02d-%02d %02d:%02d:%02d"
-                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
-              - ble_client.ble_write:
-                  id: chihiros_doctor
-                  service_uuid: ${ble_service}
-                  characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_doctor)++);
-              - delay: 200ms
-              - script.execute: stuur_doctor_instellingen
-              - script.wait: stuur_doctor_instellingen
-              - delay: 200ms
-              - switch.turn_off: doctor_verbinding
-              - logger.log: "doctor: instellingen verstuurd, verbinding verbroken"
+        - switch.turn_off: doctor_verbinding
+        - logger.log: "doctor: klaar"
     on_disconnect:
       then:
         - logger.log: "doctor: verbinding verbroken"
@@ -96,30 +65,12 @@ script:
           then:
             - switch.turn_on: doctor_verbinding
 
-  # TDS (positie 1) gevolgd door Volume (positie 2) — volgorde essentieel.
-  # Apparaat onderscheidt de twee writes ALLEEN op volgorde, het frameformaat is identiek.
-  - id: stuur_doctor_instellingen
+  - id: doctor_debounce
+    mode: restart
     then:
-      # TDS → EC-waarde in µS/cm (ppm / 0.4), past in één byte
-      - logger.log:
-          format: "doctor: TDS %d ppm → EC 0x%02x"
-          args: ["(int)id(num_doctor_tds).state", "(uint8_t)roundf(id(num_doctor_tds).state / 0.4f)"]
-      - ble_client.ble_write:
-          id: chihiros_doctor
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::device_settings(0x00, (uint8_t)roundf(id(num_doctor_tds).state / 0.4f), id(cmd_seq_doctor)++);
-      - delay: 200ms
-      # Volume → liters × 2, past in één byte
-      - logger.log:
-          format: "doctor: volume %d L → 0x%02x"
-          args: ["(int)id(num_doctor_volume).state", "(uint8_t)(id(num_doctor_volume).state * 2.0f)"]
-      - ble_client.ble_write:
-          id: chihiros_doctor
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::device_settings(0x00, (uint8_t)(id(num_doctor_volume).state * 2.0f), id(cmd_seq_doctor)++);
-      - logger.log: "doctor: instellingen gestuurd"
+      - delay: 1500ms
+      - script.execute: doctor_verbind_als_klaar
+
 
 switch:
   - platform: ble_client
@@ -134,9 +85,7 @@ button:
     id: btn_doctor_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - globals.set:
-          id: doctor_rtc_only
-          value: 'true'
+      - lambda: id(doctor_device).set_rtc_only();
       - script.execute: doctor_verbind_als_klaar
 
 number:
@@ -152,7 +101,7 @@ number:
     unit_of_measurement: "ppm"
     optimistic: true
     on_value:
-      - script.execute: doctor_verbind_als_klaar
+      - script.execute: doctor_debounce
 
   - platform: template
     name: "Doctor Mate volume"
@@ -166,7 +115,7 @@ number:
     unit_of_measurement: "L"
     optimistic: true
     on_value:
-      - script.execute: doctor_verbind_als_klaar
+      - script.execute: doctor_debounce
 
 select:
   - platform: template

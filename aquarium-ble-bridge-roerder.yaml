@@ -22,11 +22,6 @@
 #   ook als de ESP32 net herstart is.
 
 globals:
-  - id: cmd_seq_roerder
-    type: uint8_t
-    restore_value: false
-    initial_value: '1'
-
   - id: roerder_k0_aan
     type: bool
     restore_value: true
@@ -44,10 +39,9 @@ globals:
     restore_value: true
     initial_value: 'false'
 
-  - id: roerder_rtc_only
-    type: bool
+  - id: roerder_device
+    type: chihiros::RoerderDevice
     restore_value: false
-    initial_value: 'false'
 
 ble_client:
   - mac_address: ${roerder_mac}
@@ -55,49 +49,33 @@ ble_client:
     on_connect:
       then:
         - delay: 500ms
-        # Verplichte Chihiros-handshake
-        - logger.log: "roerder: Auth"
-        - ble_client.ble_write:
-            id: chihiros_roerder
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda return chihiros::auth(id(cmd_seq_roerder)++);
-        - delay: 200ms
-        - if:
+        - lambda: |-
+            uint8_t uur[]  = {(uint8_t)id(roerder_k0_start_uur).state, (uint8_t)id(roerder_k1_start_uur).state,
+                              (uint8_t)id(roerder_k2_start_uur).state, (uint8_t)id(roerder_k3_start_uur).state};
+            uint8_t min_[] = {(uint8_t)id(roerder_k0_start_min).state, (uint8_t)id(roerder_k1_start_min).state,
+                              (uint8_t)id(roerder_k2_start_min).state, (uint8_t)id(roerder_k3_start_min).state};
+            uint8_t vrlp[] = {(uint8_t)id(roerder_k0_voorloop).state, (uint8_t)id(roerder_k1_voorloop).state,
+                              (uint8_t)id(roerder_k2_voorloop).state, (uint8_t)id(roerder_k3_voorloop).state};
+            uint8_t spd[]  = {(uint8_t)id(roerder_k0_snelheid).state, (uint8_t)id(roerder_k1_snelheid).state,
+                              (uint8_t)id(roerder_k2_snelheid).state, (uint8_t)id(roerder_k3_snelheid).state};
+            uint8_t dur[]  = {(uint8_t)id(roerder_k0_duur).state, (uint8_t)id(roerder_k1_duur).state,
+                              (uint8_t)id(roerder_k2_duur).state, (uint8_t)id(roerder_k3_duur).state};
+            id(roerder_device).prepare(
+              id(ntp_tijd).now(), uur, min_, vrlp, spd, dur,
+              id(roerder_k0_aan), id(roerder_k1_aan), id(roerder_k2_aan), id(roerder_k3_aan)
+            );
+        - while:
             condition:
-              lambda: return id(roerder_rtc_only);
+              lambda: return id(roerder_device).has_next();
             then:
-              # RTC sync only — geen config
-              - logger.log:
-                  format: "roerder: RTC sync %04d-%02d-%02d %02d:%02d:%02d"
-                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
               - ble_client.ble_write:
                   id: chihiros_roerder
                   service_uuid: ${ble_service}
                   characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_roerder)++);
+                  value: !lambda return id(roerder_device).next();
               - delay: 200ms
-              - globals.set:
-                  id: roerder_rtc_only
-                  value: 'false'
-              - switch.turn_off: roerder_verbinding
-              - logger.log: "roerder: RTC sync klaar"
-            else:
-              # Volledige config: RTC → config per kanaal → staat herstel
-              - logger.log:
-                  format: "roerder: RTC %04d-%02d-%02d %02d:%02d:%02d"
-                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
-              - ble_client.ble_write:
-                  id: chihiros_roerder
-                  service_uuid: ${ble_service}
-                  characteristic_uuid: ${ble_tx}
-                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_roerder)++);
-              - delay: 200ms
-              - script.execute: stuur_roerder_config
-              - script.wait: stuur_roerder_config
-              - delay: 200ms
-              - switch.turn_off: roerder_verbinding
-              - logger.log: "roerder: instellingen verstuurd, verbinding verbroken"
+        - switch.turn_off: roerder_verbinding
+        - logger.log: "roerder: klaar"
     on_disconnect:
       then:
         - logger.log: "roerder: verbinding verbroken"
@@ -111,93 +89,6 @@ script:
           then:
             - switch.turn_on: roerder_verbinding
 
-  # Stuurt 4 writes per kanaal: weekdays, CMD_2A, timer, activeren
-  - id: stuur_kanaal_config
-    parameters:
-      kanaal: int
-    then:
-      # Kanaal activeren
-      - ble_client.ble_write:
-          id: chihiros_roerder
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::stir_enable((uint8_t)kanaal, id(cmd_seq_roerder)++);
-      - delay: 100ms
-      # Weekdays: altijd 0x7f (elke dag) — STIR_SPEED byte[1] = weekdays bitmask
-      - ble_client.ble_write:
-          id: chihiros_roerder
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::stir_weekdays((uint8_t)kanaal, 0x7f, id(cmd_seq_roerder)++);
-      - delay: 100ms
-      # CMD_2A: voorlooptijd (sec) + snelheid (0-20) — snelheid zowel schema als Run
-      - ble_client.ble_write:
-          id: chihiros_roerder
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t spd[]  = {(uint8_t)id(roerder_k0_snelheid).state,  (uint8_t)id(roerder_k1_snelheid).state,
-                              (uint8_t)id(roerder_k2_snelheid).state,  (uint8_t)id(roerder_k3_snelheid).state};
-            uint8_t vrlp[] = {(uint8_t)id(roerder_k0_voorloop).state,  (uint8_t)id(roerder_k1_voorloop).state,
-                              (uint8_t)id(roerder_k2_voorloop).state,  (uint8_t)id(roerder_k3_voorloop).state};
-            return chihiros::stir_schema((uint8_t)kanaal, vrlp[kanaal], spd[kanaal], id(cmd_seq_roerder)++);
-      - delay: 100ms
-      # STIR_TIMER mode 3: dagelijks klokschema op begintijd, duur in seconden
-      - ble_client.ble_write:
-          id: chihiros_roerder
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda |-
-            uint8_t uur[]  = {(uint8_t)id(roerder_k0_start_uur).state,  (uint8_t)id(roerder_k1_start_uur).state,
-                              (uint8_t)id(roerder_k2_start_uur).state,  (uint8_t)id(roerder_k3_start_uur).state};
-            uint8_t min[]  = {(uint8_t)id(roerder_k0_start_min).state,  (uint8_t)id(roerder_k1_start_min).state,
-                              (uint8_t)id(roerder_k2_start_min).state,  (uint8_t)id(roerder_k3_start_min).state};
-            uint8_t dur[]  = {(uint8_t)id(roerder_k0_duur).state,       (uint8_t)id(roerder_k1_duur).state,
-                              (uint8_t)id(roerder_k2_duur).state,        (uint8_t)id(roerder_k3_duur).state};
-            return chihiros::stir_timer((uint8_t)kanaal, uur[kanaal], min[kanaal], dur[kanaal], id(cmd_seq_roerder)++);
-      - delay: 100ms
-
-  # Herstel welke kanalen aan/uit staan — alle 4 in één write (0xff = niet aanraken)
-  - id: herstel_roerder_staat
-    then:
-      - logger.log:
-          format: "roerder: herstel K0=%d K1=%d K2=%d K3=%d"
-          args: ["(int)id(roerder_k0_aan)", "(int)id(roerder_k1_aan)", "(int)id(roerder_k2_aan)", "(int)id(roerder_k3_aan)"]
-      - ble_client.ble_write:
-          id: chihiros_roerder
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::stir_restore((uint8_t)id(roerder_k0_aan), (uint8_t)id(roerder_k1_aan), (uint8_t)id(roerder_k2_aan), (uint8_t)id(roerder_k3_aan), id(cmd_seq_roerder)++);
-
-  # Volledige initialisatie: config voor alle 4 kanalen → apply → staat-herstel
-  - id: stuur_roerder_config
-    then:
-      - script.execute:
-          id: stuur_kanaal_config
-          kanaal: 0
-      - script.wait: stuur_kanaal_config
-      - script.execute:
-          id: stuur_kanaal_config
-          kanaal: 1
-      - script.wait: stuur_kanaal_config
-      - script.execute:
-          id: stuur_kanaal_config
-          kanaal: 2
-      - script.wait: stuur_kanaal_config
-      - script.execute:
-          id: stuur_kanaal_config
-          kanaal: 3
-      - script.wait: stuur_kanaal_config
-      # Apply slaat de instellingen op in het apparaat
-      - logger.log: "roerder: config toegepast"
-      - ble_client.ble_write:
-          id: chihiros_roerder
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::stir_apply(id(cmd_seq_roerder)++);
-      - delay: 100ms
-      - script.execute: herstel_roerder_staat
-      - script.wait: herstel_roerder_staat
 
 switch:
   - platform: ble_client
@@ -279,9 +170,7 @@ button:
     id: btn_roerder_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - globals.set:
-          id: roerder_rtc_only
-          value: 'true'
+      - lambda: id(roerder_device).set_rtc_only();
       - script.execute: roerder_verbind_als_klaar
 
 number:

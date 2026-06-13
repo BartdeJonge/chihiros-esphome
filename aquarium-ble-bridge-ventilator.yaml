@@ -24,15 +24,14 @@
 # Ventilator regelt zichzelf o.b.v. temperatuurdrempels; BLE alleen voor monitoring en config.
 
 globals:
-  - id: cmd_seq_ventilator
-    type: uint8_t
-    restore_value: false
-    initial_value: '1'
-
   - id: ventilator_silent_mode
     type: bool
     restore_value: true
     initial_value: 'false'
+
+  - id: ventilator_device
+    type: chihiros::VentilatorDevice
+    restore_value: false
 
 ble_client:
   - mac_address: ${ventilator_mac}
@@ -40,63 +39,26 @@ ble_client:
     on_connect:
       then:
         - delay: 500ms
-        - logger.log: "ventilator: Auth"
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda return chihiros::auth(id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        - logger.log:
-            format: "ventilator: RTC %04d-%02d-%02d %02d:%02d:%02d"
-            args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        - logger.log: "ventilator: extra auth [06]"
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda return chihiros::auth_ext1(id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        - logger.log: "ventilator: extra auth [08]"
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda return chihiros::auth_ext2(id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        - logger.log: "ventilator: mode init"
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda |-
-              return chihiros::set_mode(id(ventilator_silent_mode) ? chihiros::data::SILENT_ON : chihiros::data::SILENT_OFF, id(cmd_seq_ventilator)++);
-        - delay: 200ms
-        - script.execute: stuur_ventilator_drempel
-        - script.wait: stuur_ventilator_drempel
-        - logger.log:
-            format: "ventilator: snelheid=%d"
-            args: ["(int)id(num_ventilator_snelheid).state"]
-        - ble_client.ble_write:
-            id: chihiros_ventilator
-            service_uuid: ${ble_service}
-            characteristic_uuid: ${ble_tx}
-            value: !lambda return chihiros::fan_speed((uint8_t)id(num_ventilator_snelheid).state, id(cmd_seq_ventilator)++);
+        - lambda: |-
+            id(ventilator_device).prepare(
+              id(ntp_tijd).now(), id(ventilator_silent_mode),
+              (uint8_t)id(num_ventilator_start_temp).state,
+              (uint8_t)id(num_ventilator_max_temp).state,
+              (uint8_t)id(num_ventilator_snelheid).state
+            );
+        - while:
+            condition:
+              lambda: return id(ventilator_device).has_next();
+            then:
+              - ble_client.ble_write:
+                  id: chihiros_ventilator
+                  service_uuid: ${ble_service}
+                  characteristic_uuid: ${ble_tx}
+                  value: !lambda return id(ventilator_device).next();
+              - delay: 200ms
         - delay: 2000ms
         - switch.turn_off: ventilator_verbinding
-        - logger.log: "ventilator: init klaar, verbinding verbroken"
+        - logger.log: "ventilator: klaar"
     on_disconnect:
       then:
         - logger.log: "ventilator: verbinding verbroken"
@@ -119,16 +81,12 @@ script:
           then:
             - switch.turn_on: ventilator_verbinding
 
-  - id: stuur_ventilator_drempel
+  - id: ventilator_debounce
+    mode: restart
     then:
-      - logger.log:
-          format: "ventilator: drempel start=%d max=%d"
-          args: ["(int)id(num_ventilator_start_temp).state", "(int)id(num_ventilator_max_temp).state"]
-      - ble_client.ble_write:
-          id: chihiros_ventilator
-          service_uuid: ${ble_service}
-          characteristic_uuid: ${ble_tx}
-          value: !lambda return chihiros::fan_temp_thresh((uint8_t)id(num_ventilator_start_temp).state, (uint8_t)id(num_ventilator_max_temp).state, id(cmd_seq_ventilator)++);
+      - delay: 1500ms
+      - script.execute: ventilator_verbind_als_klaar
+
 
 switch:
   - platform: ble_client
@@ -174,7 +132,7 @@ number:
     unit_of_measurement: "°C"
     optimistic: true
     on_value:
-      - script.execute: ventilator_verbind_als_klaar
+      - script.execute: ventilator_debounce
 
   - platform: template
     name: "Ventilator maximale koeling"
@@ -188,7 +146,7 @@ number:
     unit_of_measurement: "°C"
     optimistic: true
     on_value:
-      - script.execute: ventilator_verbind_als_klaar
+      - script.execute: ventilator_debounce
 
   - platform: template
     name: "Ventilator handmatige snelheid"
@@ -202,7 +160,7 @@ number:
     unit_of_measurement: ""
     optimistic: true
     on_value:
-      - script.execute: ventilator_verbind_als_klaar
+      - script.execute: ventilator_debounce
 
 sensor:
   - platform: ble_client
