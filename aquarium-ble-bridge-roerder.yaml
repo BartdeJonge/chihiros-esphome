@@ -216,12 +216,10 @@ switch:
       - globals.set:
           id: roerder_k0_aan
           value: 'true'
-      - script.execute: roerder_verbind_als_klaar
     turn_off_action:
       - globals.set:
           id: roerder_k0_aan
           value: 'false'
-      - script.execute: roerder_verbind_als_klaar
 
   - platform: template
     name: "Roerder kanaal 1"
@@ -233,12 +231,10 @@ switch:
       - globals.set:
           id: roerder_k1_aan
           value: 'true'
-      - script.execute: roerder_verbind_als_klaar
     turn_off_action:
       - globals.set:
           id: roerder_k1_aan
           value: 'false'
-      - script.execute: roerder_verbind_als_klaar
 
   - platform: template
     name: "Roerder kanaal 2"
@@ -250,12 +246,10 @@ switch:
       - globals.set:
           id: roerder_k2_aan
           value: 'true'
-      - script.execute: roerder_verbind_als_klaar
     turn_off_action:
       - globals.set:
           id: roerder_k2_aan
           value: 'false'
-      - script.execute: roerder_verbind_als_klaar
 
   - platform: template
     name: "Roerder kanaal 3"
@@ -267,20 +261,18 @@ switch:
       - globals.set:
           id: roerder_k3_aan
           value: 'true'
-      - script.execute: roerder_verbind_als_klaar
     turn_off_action:
       - globals.set:
           id: roerder_k3_aan
           value: 'false'
-      - script.execute: roerder_verbind_als_klaar
 
 button:
   - platform: template
-    name: "Roerder config toepassen"
+    name: "Roerder schema toepassen"
     id: btn_roerder_config
     icon: mdi:content-save-cog
     on_press:
-      - script.execute: stuur_roerder_config
+      - script.execute: roerder_verbind_als_klaar
 
   - platform: template
     name: "Roerder RTC sync"

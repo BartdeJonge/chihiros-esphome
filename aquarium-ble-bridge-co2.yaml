@@ -1,10 +1,5 @@
 # --- CO2 CONTROLLER ---
 
-esp32_ble_tracker:
-  on_ble_advertise:
-    - mac_address: ${co2_mac}
-      then:
-        - lambda: ESP_LOGI("co2", "CO2 controller gevonden! RSSI=%d", x.get_rssi());
 #
 # Protocol afgeleid uit btsnoop HCI logs (2026-05-30):
 #
