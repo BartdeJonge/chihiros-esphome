@@ -264,7 +264,7 @@ inline int co2_start_minuten(int fotoperiode_uur, int fotoperiode_min, int prest
 struct VentilatorNotificatie {
     float fan_speed;   // %
     float kamer_temp;  // °C  (byte[6:7] / 256)
-    float water_temp;  // °C  (byte[11] / 10)
+    float water_temp;  // °C  (byte[10:11] / 10, uint16 big-endian)
     float humidity;    // %   (byte[12])
     bool  valid;
 };
@@ -275,7 +275,7 @@ inline VentilatorNotificatie parse_ventilator_notificatie(const std::vector<uint
         d.valid      = true;
         d.fan_speed  = (float)x[5];
         d.kamer_temp = ((x[6] << 8) | x[7]) / 256.0f;
-        d.water_temp = x[11] / 10.0f;
+        d.water_temp = ((x[10] << 8) | x[11]) / 10.0f;
         d.humidity   = (float)x[12];
     }
     return d;

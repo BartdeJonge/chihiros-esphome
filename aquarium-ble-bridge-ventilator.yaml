@@ -10,7 +10,7 @@
 #   4. Extra auth [08] — tweede ventilator-specifieke auth
 #   5. Mode init       — stuurt de opgeslagen silent-mode stand
 #   6. Drempel         — watertemperatuur start/max
-#   7. Snelheid        — handmatige snelheid (0 = auto)
+#   7. Snelheid        — 0 = device auto-modus (eigen thermostaat), >0 = handmatige override
 #   8. Wachten         — 2s wachten op notificaties van apparaat
 #   9. Disconnect
 #

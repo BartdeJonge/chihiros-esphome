@@ -95,9 +95,22 @@ public:
         push_auth_rtc_twice(time);
         push(auth_ext1(seq()));
         push(auth_ext2(seq()));
-        push(set_mode(silent_mode ? data::SILENT_ON : data::SILENT_OFF, seq()));
-        push(fan_temp_thresh(start_temp, max_temp, seq()));
-        push(fan_speed(speed, seq()));
+        if (!silent_mode) {
+            // Silent: 6× alternerende mode-commando's, geen thresh/speed/final-auth
+            for (int i = 0; i < 3; i++) {
+                push(set_mode(data::SILENT_ON,  seq()));
+                push(set_mode(data::SILENT_OFF, seq()));
+            }
+        } else {
+            // Normaal: thresh + twee mode-commando's + speed + final auth
+            push(fan_temp_thresh(start_temp, max_temp, seq()));
+            push(set_mode(data::SILENT_OFF, seq()));
+            push(set_mode(data::SILENT_ON,  seq()));
+            if (speed > 0)
+                push(fan_speed(speed, seq()));
+            push(auth_ext1(seq()));
+            push(auth_ext2(seq()));
+        }
     }
 };
 

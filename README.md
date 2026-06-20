@@ -200,8 +200,8 @@ chihiros::data::AUTH_EXT1    // 0x06 — fan extra auth step 1
 chihiros::data::AUTH_EXT2    // 0x08 — fan extra auth step 2
 chihiros::data::RESET_SCHEMA // 0x07 — evaluate schedule now
 chihiros::data::RESET_AUTO   // 0x12 — switch to auto mode
-chihiros::data::SILENT_ON    // 0x22 — fan silent mode on (inverted: 0x22=ON, 0x23=OFF)
-chihiros::data::SILENT_OFF   // 0x23 — fan silent mode off
+chihiros::data::SILENT_ON    // 0x22 — fan mode byte (sequence matters, see Cooling Fan section)
+chihiros::data::SILENT_OFF   // 0x23 — fan mode byte (sequence matters, see Cooling Fan section)
 chihiros::data::CO2_ON       // 0x64 — CO2 valve open
 chihiros::data::CO2_OFF      // 0x00 — CO2 valve closed
 chihiros::data::CO2_EMPTY    // 0x6f — schedule slot unused
@@ -440,6 +440,10 @@ toggle ch0 OFF  a5 01 0f 00 01 14 ff ff 00 ff ff ff ff ff ff ff e4
 
 ## Cooling Fan
 
+> Protocol verified via btsnoop HCI analysis (2026-06-20).
+
+The fan has its own internal thermostat and regulates speed autonomously without BLE. The bridge connects every 5 minutes solely to read temperature/humidity notifications and to push updated threshold settings. **Do not send a FAN_SPEED command in auto mode** — the device interprets any explicit speed value (including 0) as a manual override that disables autonomous control.
+
 ```mermaid
 sequenceDiagram
     participant ESP as ESP32-S3
@@ -448,51 +452,80 @@ sequenceDiagram
     loop Every 5 minutes
         ESP->>FAN: BLE connect
         ESP->>FAN: AUTH
-        ESP->>FAN: RTC
-        ESP->>FAN: RTC (2nd)
-        ESP->>FAN: AUTH_EXT1 (device-specific)
-        ESP->>FAN: AUTH_EXT2 (device-specific)
-        ESP->>FAN: SET_MODE (silent on/off)
-        ESP->>FAN: TEMP_THRESH (start °C, max °C)
-        ESP->>FAN: FAN_SPEED (0 = auto)
+        ESP->>FAN: RTC × 2
+        ESP->>FAN: AUTH_EXT1
+        ESP->>FAN: AUTH_EXT2
+        alt normal mode
+            ESP->>FAN: TEMP_THRESH (start °C, max °C)
+            ESP->>FAN: SET_MODE 0x23 (first)
+            ESP->>FAN: SET_MODE 0x22 (second — activates auto-thermostat)
+            Note over ESP: No FAN_SPEED — device self-regulates
+            ESP->>FAN: AUTH_EXT1
+            ESP->>FAN: AUTH_EXT2
+        else silent mode
+            ESP->>FAN: SET_MODE 0x22, 0x23, 0x22, 0x23, 0x22, 0x23 (6× alternating)
+            Note over ESP: No THRESH, no SPEED, no final AUTH
+        end
         Note over ESP: Wait 2s for notification
         FAN-->>ESP: Notification: fan%, room temp, water temp, humidity
         ESP->>FAN: BLE disconnect
     end
-    Note over FAN: Controls speed autonomously based on water temp
+    Note over FAN: Controls speed autonomously on internal thermostat
 ```
 
-Notifications (`x[4] == 0x01`):
+**Mode commands (cmd=0x05):**
+
+The two data bytes `0x22` and `0x23` are **not** simply on/off flags. The _sequence_ matters:
+- Normal mode: send `0x23` then `0x22` — the second command activates the auto-thermostat
+- Silent mode: send 6× alternating starting with `0x22` (`22 23 22 23 22 23`)
+
+Sending only one mode command, or sending fan_speed=0 without the correct mode sequence, will leave the device in manual-off state.
+
+**Notifications** (`x[4] == 0x01`):
 
 | Byte | Value |
 |---|---|
 | `x[5]` | Fan speed (%) |
 | `x[6:7] / 256` | Room temperature (°C) |
-| `x[11] / 10` | Water temperature (°C) |
+| `(x[10] << 8 \| x[11]) / 10` | Water temperature (°C) — **uint16 big-endian** |
 | `x[12]` | Humidity (%) |
 
+> Water temperature is a 2-byte big-endian uint16 divided by 10. Using only `x[11]` overflows at temperatures above 25.5°C (raw value > 255), producing wrong readings like 0.5°C for an actual 26.1°C.
+
 <details>
-<summary>Wire examples — connect (silent on, 28–32°C) + notification decode</summary>
+<summary>Wire examples — normal mode (24–28°C) + silent mode + notification decode</summary>
 
 ```
 Frame format: [header] 01 [len] 00 [seq] [cmd] [data...] [XOR-CRC]
 
-Connect sequence:
+Normal mode connect sequence (confirmed btsnoop 2026-06-20):
 1. auth        5a 01 06 00 01 04 01 03
-2. rtc         5a 01 0b 00 02 09 1a 06 01 0e 1e 00 0c
-3. rtc (2nd)   5a 01 0b 00 03 09 1a 06 01 0e 1e 00 0d
-4. auth_ext1   a5 01 06 00 04 04 06 01
-5. auth_ext2   a5 01 06 00 05 04 08 0e
-6. silent ON   5a 01 08 00 06 05 22 ff ff 28   (0x22=ON, 0x23=OFF — inverted!)
-7. temp_thresh a5 01 08 00 07 21 1c 20 ff ec   28°C start, 32°C max
-8. fan_speed   5a 01 07 00 08 07 ff 00 f6       0 = auto
+2. rtc         5a 01 0b 00 02 09 1a 05 05 0b 39 0c 3e
+3. rtc (2nd)   5a 01 0b 00 03 09 1a 05 05 0b 39 0c 3d
+4. auth_ext1   a5 01 06 00 04 04 06 1e
+5. auth_ext2   a5 01 06 00 05 04 08 17
+6. temp_thresh a5 01 08 00 06 21 18 1c ff ce   start=24°C (0x18), max=28°C (0x1c)
+7. mode 0x23   5a 01 08 00 07 05 23 ff ff 30   first  — SILENT_OFF
+8. mode 0x22   5a 01 08 00 08 05 22 ff ff 0e   second — activates auto-thermostat
+9. auth_ext1   a5 01 06 00 09 04 06 20
+10. auth_ext2  a5 01 06 00 0a 04 08 2d
+
+Silent mode connect sequence (confirmed btsnoop 2026-06-20):
+1–5. auth + rtc×2 + ext1 + ext2  (same as above)
+6.  mode 0x22  5a 01 08 00 06 05 22 ff ff 33
+7.  mode 0x23  5a 01 08 00 07 05 23 ff ff 31
+8.  mode 0x22  5a 01 08 00 08 05 22 ff ff 31
+9.  mode 0x23  5a 01 08 00 09 05 23 ff ff 0f
+10. mode 0x22  5a 01 08 00 0a 05 22 ff ff 0f
+11. mode 0x23  5a 01 08 00 0b 05 23 ff ff 0d
+(no temp_thresh, no fan_speed, no final auth_ext)
 
 Notification (x[4] == 0x01):
-00 00 00 00 01 2d 18 80 00 00 00 fa 3e
-                  ^^                        x[5]    = 45  → fan 45%
-                     ^^ ^^                  x[6:7]  = 0x1880 → 24.5°C room
-                                 ^^         x[11]   = 250 → 25.0°C water
-                                    ^^      x[12]   = 62  → 62% humidity
+5b 09 0b 00 01 25 19 07 0a 49 00 f3 22
+                  ^^                        x[5]         = 37   → fan 37%
+                     ^^ ^^                  x[6:7]/256   = 0x1907/256 → 25.0°C room
+                              ^^ ^^         x[10:11]/10  = 0x00f3/10  → 24.3°C water
+                                    ^^      x[12]        = 34   → 34% humidity
 ```
 </details>
 
