@@ -23,6 +23,13 @@ globals:
     type: chihiros::CO2Device
     restore_value: false
 
+  # Epoch van de laatst afgeronde config-drain — persistent zodat de
+  # "laatste sync"-sensor ook na een ESP-crash klopt
+  - id: co2_laatste_sync_ts
+    type: float
+    restore_value: true
+    initial_value: '0'
+
 ble_client:
   - mac_address: ${co2_mac}
     id: chihiros_co2
@@ -46,6 +53,11 @@ ble_client:
                   characteristic_uuid: ${ble_tx}
                   value: !lambda return id(co2_device).next();
               - delay: 200ms
+        - lambda: |-
+            if (id(ntp_tijd).now().is_valid()) {
+              id(co2_laatste_sync_ts) = id(ntp_tijd).now().timestamp;
+              id(co2_laatste_sync).publish_state(id(co2_laatste_sync_ts));
+            }
         - switch.turn_off: co2_verbinding
         - logger.log: "co2: klaar"
     on_disconnect:
@@ -72,7 +84,9 @@ switch:
     name: "CO2 schema actief"
     id: sw_co2_schema_actief
     icon: mdi:molecule-co2
-    restore_mode: RESTORE_DEFAULT_ON
+    # DISABLED: de global (restore_value) is de bron van waarheid; boot-restore
+    # van de switch zelf zou de herstelde global kunnen overschrijven
+    restore_mode: DISABLED
     lambda: return id(co2_schema_actief);
     turn_on_action:
       - globals.set:
@@ -98,8 +112,14 @@ button:
     id: btn_co2_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - lambda: id(co2_device).set_rtc_only();
-      - script.execute: co2_verbind_als_klaar
+      # Vlag alleen zetten als er echt verbonden wordt — een blijven-hangen vlag
+      # maakt van de volgende schema-push stilletjes een RTC-only sessie
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - lambda: id(co2_device).set_rtc_only();
+            - script.execute: co2_verbind_als_klaar
 
 sensor:
   - platform: ble_client
@@ -115,4 +135,15 @@ sensor:
     lambda: |-
       ESP_LOGI("co2", "Notificatie: %s", chihiros::hex_dump(x).c_str());
       if (x.size() >= 7) return (float)x[6];
+      return NAN;
+
+  - platform: template
+    id: co2_laatste_sync
+    name: "CO2 laatste sync"
+    device_class: timestamp
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 300s
+    lambda: |-
+      if (id(co2_laatste_sync_ts) > 0) return id(co2_laatste_sync_ts);
       return NAN;

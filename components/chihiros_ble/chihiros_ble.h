@@ -210,9 +210,13 @@ inline std::vector<uint8_t> wrgb_schedule(uint8_t on_h, uint8_t on_m,
 
 // ── Doctor Mate / Dosing ──────────────────────────────────────────────────────
 
-// Doctor Mate: b1=0x00 always; b2=ec for TDS (pos 1) or volume for Volume (pos 2).
-inline std::vector<uint8_t> device_settings(uint8_t b1, uint8_t b2, uint8_t seq) {
-    return pakket(hdr::DEVICE, cmd::SETTINGS, {b1, b2}, seq);
+// Doctor Mate: 16-bit big-endian waarde [hi, lo]; TDS (pos 1) = EC in µS/cm,
+// Volume (pos 2) = liters × 2 — onderscheid uitsluitend op volgorde.
+// Alle btsnoop-captures hadden waarden ≤ 255 (hi altijd 0x00); hi-byte als
+// high-byte is afgeleid uit de app die TDS > 102 ppm toestaat — niet gesnift.
+inline std::vector<uint8_t> device_settings(uint16_t value, uint8_t seq) {
+    return pakket(hdr::DEVICE, cmd::SETTINGS,
+        {(uint8_t)(value >> 8), (uint8_t)(value & 0xff)}, seq);
 }
 
 // Dosing pump: trigger a manual dose for one pump.

@@ -1,0 +1,84 @@
+substitutions:
+  device_name: woonkamer-tv-meubel
+  current_res: '0.00248'
+  voltage_div: '755'
+  cf1_pin: GPIO4
+
+esphome:
+  name: '${device_name}'
+esp8266:
+  board: esp8285
+
+  on_boot:
+    then:
+      - switch.turn_on: relay
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: NONE
+  post_connect_roaming: false
+  reboot_timeout: 0s
+  
+logger:
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+  
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+    
+# Sets time from Homeassistant
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+
+# Config for switch
+switch:
+  - platform: gpio
+    pin: GPIO15
+    restore_mode: RESTORE_DEFAULT_ON
+    id: relay
+    name: 'Relay'
+
+# Status LED for connection
+status_led:
+  pin:
+    number: GPIO2
+    inverted: true
+
+# Sensors for Voltage (V), Current (A), Power (W), Daily energy usage (kWh)
+sensor:
+  - platform: hlw8012
+    sel_pin:
+      number: GPIO12
+      inverted: true
+    cf_pin: GPIO5
+    cf1_pin: ${cf1_pin}
+    current_resistor: ${current_res}
+    voltage_divider: ${voltage_div}
+    power:
+      name: 'Power'
+      unit_of_measurement: 'W'
+      id: power
+      icon: mdi:flash-outline
+    change_mode_every: 4
+    update_interval: 10s
+
+  - platform: total_daily_energy
+    name: 'daily energy'
+    power_id: power
+    unit_of_measurement: 'kWh'
+    accuracy_decimals: 5
+    filters:
+      - multiply: 0.001

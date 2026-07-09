@@ -1,0 +1,91 @@
+substitutions:
+  device_name: tuin-lampen-glijbaan
+  ha_name: Tuin lampen glijbaan
+  
+esphome:
+  name: '${device_name}'
+esp8266:
+  board: esp01_1m
+
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: NONE
+  post_connect_roaming: false
+  reboot_timeout: 0s
+
+logger:
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+  
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+    
+output:
+  - platform: gpio
+    pin: GPIO5
+    id: shelly_1l_relay
+
+light:
+  - platform: binary
+    name: Licht
+    output: shelly_1l_relay
+    id: lightid
+    restore_mode: always_off
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO4
+    name: switch_1
+    on_state:
+      then:
+        - light.toggle: lightid
+    id: switchid1
+    filters:
+      - delayed_on_off: 50ms
+  - platform: gpio
+    pin:
+      number: GPIO14
+    name: switch_2
+
+sensor:
+  - platform: ntc
+    sensor: temp_resistance_reading
+    name: Temperatuur
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    icon: "mdi:thermometer"
+    calibration:
+      b_constant: 3350
+      reference_resistance: 10kOhm
+      reference_temperature: 298.15K
+    on_value_range:
+      - above: "80.0"
+        then:
+          - light.turn_off: lightid
+  
+  - platform: resistance
+    id: temp_resistance_reading
+    sensor: temp_analog_reading
+    configuration: DOWNSTREAM
+    resistor: 32kOhm
+  
+  - platform: adc
+    id: temp_analog_reading
+    pin: A0
+
+status_led:
+  pin: GPIO0

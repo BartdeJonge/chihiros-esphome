@@ -1,0 +1,144 @@
+esphome:
+  name: "higrow-1"
+  on_boot:
+    priority: 200.0
+    then:
+      - switch.turn_on: power_sensors
+      - delay: 10s
+      - repeat:
+          count: 5
+          then:
+            - component.update: soil_moisture
+            - delay: 200ms
+      - component.update: temperature_humidity
+      - component.update: battery_voltage
+      - switch.turn_off: power_sensors
+
+esp32:
+  board: nodemcu-32s
+  framework:
+    type: arduino
+
+safe_mode:
+  disabled: true
+
+deep_sleep:
+  id: deep_sleep_control
+  sleep_duration: 8h
+  run_duration: 25s
+
+mqtt:
+  broker: !secret mqtt_broker
+  topic_prefix: plant_sensor_1
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  discovery: true
+  on_message:
+    - topic: plant_sensor_1/ota_mode
+      payload: "ON"
+      then:
+        - deep_sleep.prevent: deep_sleep_control
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: true
+  power_save_mode: NONE
+  post_connect_roaming: false
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+
+switch:
+  - platform: gpio
+    pin: GPIO4
+    id: power_sensors
+    internal: true
+    restore_mode: ALWAYS_OFF
+
+sensor:
+  - platform: adc
+    pin: GPIO32
+    id: soil_moisture
+    name: "Bodemvocht"
+    device_class: moisture
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: never
+    attenuation: 12db
+    filters:
+      - median:
+          window_size: 5
+          send_every: 5
+      - calibrate_linear:
+          - 2.95 -> 0.0
+          - 1.245 -> 100.0
+      - lambda: |-
+          if (x < 0.0) return 0.0;
+          if (x > 100.0) return 100.0;
+          return x;
+
+  - platform: dht
+    pin:
+      number: GPIO16
+      mode:
+        input: true
+        pullup: true
+    model: DHT11
+    id: temperature_humidity
+    temperature:
+      name: "Temperatuur"
+      device_class: temperature
+      unit_of_measurement: "°C"
+      accuracy_decimals: 1
+    humidity:
+      name: "Luchtvochtigheid"
+      device_class: humidity
+      unit_of_measurement: "%"
+      accuracy_decimals: 0
+    update_interval: never
+
+  - platform: adc
+    pin: GPIO33
+    name: "Accuspanning"
+    id: battery_voltage
+    update_interval: never
+    attenuation: 12db
+    device_class: voltage
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    filters:
+      - multiply: 2.0
+
+  - platform: copy
+    source_id: battery_voltage
+    name: "Acculevel"
+    id: battery_level
+    device_class: battery
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    filters:
+      - calibrate_linear:
+          - 3.0 -> 0.0
+          - 4.2 -> 100.0
+      - lambda: |-
+          if (x < 0.0) return 0.0;
+          if (x > 100.0) return 100.0;
+          return x;
+
+button:
+  - platform: template
+    name: "Meet nu"
+    on_press:
+      - switch.turn_on: power_sensors
+      - delay: 2s
+      - repeat:
+          count: 5
+          then:
+            - component.update: soil_moisture
+            - delay: 200ms
+      - switch.turn_off: power_sensors
+
+logger:
+  baud_rate: 0

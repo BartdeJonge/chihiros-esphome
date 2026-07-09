@@ -1,0 +1,66 @@
+substitutions:
+  device_name: kill
+
+esphome:
+  name: ${device_name}
+  platform: ESP8266
+  board: esp8285
+  on_boot:
+    priority: 500
+    then:
+    - delay: 30s
+    - switch.turn_on: s26_relay
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  
+logger:
+
+api:
+  reboot_timeout:
+    minutes: 5
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  password: !secret ota_password
+  
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: True
+    name: "${device_name} Button"
+    on_press:
+      - switch.toggle: s26_relay
+    internal: true
+
+output:
+  - platform: esp8266_pwm
+    id: s26_green_led
+    pin:
+      number: GPIO13
+      inverted: True
+
+switch:
+  - platform: gpio
+    name: "${device_name} Switch"
+    pin: GPIO12
+    id: s26_relay
+    restore_mode: ALWAYS_OFF
+
+light:
+  - platform: monochromatic
+    name: "${device_name} Led"
+    output: s26_green_led
+    id: s26_led
+    internal: true

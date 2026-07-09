@@ -1,0 +1,94 @@
+# --- ROERDER KANAAL (parameterized package) ---
+#
+# Wordt 4× ingevoegd vanuit aquarium-ble-bridge-roerder.yaml met vars:
+#   kanaal        — kanaalnummer 0-3
+#   voorloop_init — standaard voorlooptijd in seconden (alleen relevant bij eerste boot)
+#
+# Entity-namen en -id's zijn identiek aan de oude losse blokken — HA merkt niets van
+# deze refactor.
+
+globals:
+  - id: roerder_k${kanaal}_aan
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+
+switch:
+  # Toggle triggert een verbinding: de staat gaat pas fysiek naar de roerder
+  # via stir_restore aan het einde van de on_connect-sequence (~10s).
+  - platform: template
+    name: "Roerder kanaal ${kanaal}"
+    id: roerder_sw_k${kanaal}
+    icon: mdi:rotate-3d-variant
+    restore_mode: DISABLED  # global is bron van waarheid (zie header roerder.yaml)
+    lambda: return id(roerder_k${kanaal}_aan);
+    turn_on_action:
+      - globals.set:
+          id: roerder_k${kanaal}_aan
+          value: 'true'
+      - script.execute: roerder_verbind_als_klaar
+    turn_off_action:
+      - globals.set:
+          id: roerder_k${kanaal}_aan
+          value: 'false'
+      - script.execute: roerder_verbind_als_klaar
+
+number:
+  - platform: template
+    id: roerder_k${kanaal}_snelheid
+    name: "Roerder kanaal ${kanaal} snelheid"
+    min_value: 0
+    max_value: 20
+    step: 1
+    initial_value: 20
+    restore_value: true
+    optimistic: true
+    icon: mdi:speedometer
+
+  - platform: template
+    id: roerder_k${kanaal}_voorloop
+    name: "Roerder kanaal ${kanaal} voorlooptijd"
+    min_value: 0
+    max_value: 240
+    step: 1
+    initial_value: ${voorloop_init}
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "s"
+    icon: mdi:timer-outline
+
+  - platform: template
+    id: roerder_k${kanaal}_start_uur
+    name: "Roerder kanaal ${kanaal} start uur"
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 8
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "h"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k${kanaal}_start_min
+    name: "Roerder kanaal ${kanaal} start minuut"
+    min_value: 0
+    max_value: 59
+    step: 1
+    initial_value: 0
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "min"
+    icon: mdi:clock-start
+
+  - platform: template
+    id: roerder_k${kanaal}_duur
+    name: "Roerder kanaal ${kanaal} duur"
+    min_value: 1
+    max_value: 240
+    step: 1
+    initial_value: 13
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "s"
+    icon: mdi:timer

@@ -1,0 +1,119 @@
+esphome:
+  name: slaapkamer-max-aanwezigheid
+  friendly_name: Slaapkamer Max aanwezigheid
+
+external_components:
+  - source:
+      type: local
+      path: screek_components
+    components: [uart, ld2410]
+
+esp32:
+  board: lolin_c3_mini
+  framework:
+    type: arduino
+
+logger:
+  hardware_uart: uart0
+
+api:
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: LIGHT
+  post_connect_roaming: false
+  reboot_timeout: 0s
+
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+
+uart:
+  id: uart_ld2410
+  tx_pin: GPIO4
+  rx_pin: GPIO3
+  baud_rate: 256000
+  parity: NONE
+  stop_bits: 1
+
+ld2410:
+  timeout: 150s
+  id: ld2410_radar
+
+binary_sensor:
+  - platform: status
+    name: Online
+  - platform: ld2410
+    has_target:
+      name: Aanwezig
+    has_moving_target:
+      name: Beweegt
+    has_still_target:
+      name: Stil aanwezig
+
+sensor:
+  - platform: template
+    name: ESP Temperatuur
+    lambda: return temperatureRead();
+    unit_of_measurement: °C
+    device_class: TEMPERATURE
+    update_interval: 30s
+    entity_category: diagnostic
+  - platform: ld2410
+    moving_distance:
+      name: Bewegingsafstand
+    still_distance:
+      name: Stilstandsafstand
+    moving_energy:
+      name: Bewegingsenergie
+    still_energy:
+      name: Stilstandsenergie
+    detection_distance:
+      name: Detectieafstand
+    light:
+      name: Lichtsterkte
+
+light:
+  - platform: status_led
+    name: Status LED
+    pin:
+      number: GPIO8
+      inverted: true
+    internal: true
+    restore_mode: ALWAYS_OFF
+
+button:
+  - platform: template
+    name: LD2410 BLE inschakelen
+    entity_category: config
+    icon: mdi:bluetooth
+    on_press:
+      lambda: id(ld2410_radar)->ble_control(true);
+  - platform: template
+    name: LD2410 BLE uitschakelen
+    entity_category: config
+    icon: mdi:bluetooth-off
+    on_press:
+      lambda: id(ld2410_radar)->ble_control(false);
+  - platform: template
+    name: LD2410 herstarten
+    icon: mdi:radar
+    entity_category: config
+    on_press:
+      lambda: id(ld2410_radar)->reboot();
+  - platform: restart
+    icon: mdi:power-cycle
+    name: ESP herstarten
+  - platform: factory_reset
+    disabled_by_default: true
+    name: Fabrieksinstellingen

@@ -1,0 +1,160 @@
+substitutions:
+  device_name: aquarium-ph
+
+esphome:
+  name: '${device_name}'
+  platform: ESP8266
+  board: d1_mini  
+  
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+
+logger:
+
+api:
+  encryption:
+    key: !secret encryption_key
+  services:
+    - service: clear_calibration
+      then:
+        - logger.log: "Clearing calibration"
+        - lambda: id(aquarium_ph).clear_calibration();;
+    - service: calibrate_low
+      then:
+        - logger.log: "Setting low point to 4"
+        - lambda: id(aquarium_ph).send_custom("Cal,LOW,4.00");
+    - service: calibrate_mid
+      then:
+        - logger.log: "Setting mid point to 7"
+        - lambda: id(aquarium_ph).send_custom("Cal,MID,7.00");
+    - service: set_temp
+      variables:
+        temperature: float
+      then:        
+        - logger.log: "Setting temperature"
+        - lambda: id(aquarium_ph).set_t(temperature);
+               
+ota:
+  password: !secret ota_password
+  
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+
+i2c:
+    
+ads1115:
+  - address: 0x48
+    id: ads1
+
+sensor:
+  - platform: ezo
+    id: aquarium_ph
+    name: "Aquarium pH"
+    address: 99
+    unit_of_measurement: "pH"
+    accuracy_decimals: 2
+ 
+  - platform: ntc
+    sensor: resistance_sensor
+    calibration:
+      b_constant: 3950
+      reference_temperature: 25°C
+      reference_resistance: 10kOhm    
+    name: "TDS Temperature"
+    id: tds_temp
+
+  - platform: resistance
+    id: resistance_sensor
+    sensor: temp_raw
+    configuration: DOWNSTREAM
+    resistor: 10kOhm
+    reference_voltage: 5.213
+    name: Resistance Sensor
+
+  - platform: ads1115
+    multiplexer: 'A1_GND'
+    gain: 6.144
+    name: "Temp Raw Voltage"
+    ads1115_id: ads1
+    id: temp_raw
+    unit_of_measurement: "v"
+    accuracy_decimals: 3
+    internal: true
+    update_interval: never
+
+  - platform: ads1115
+    multiplexer: 'A0_GND'
+    gain: 4.096
+    name: "TDS Raw Voltage"
+    ads1115_id: ads1
+    id: tds_raw
+    unit_of_measurement: "v"
+    accuracy_decimals: 3
+    internal: true
+    update_interval: never
+
+  - platform: template
+    name: "Temp Comp Voltage"
+    id: temp_comp_v
+    unit_of_measurement: 'v'
+    accuracy_decimals: 3
+    lambda: return ((id(tds_raw).state) / (1 + (0.02 * (id(tds_temp).state - 25.0))));
+    internal: true
+    update_interval: never
+
+  - platform: template
+    name: "TDS Uncalibrated"
+    id: tds_uncalibrated
+    icon: "hass:water-opacity"
+    unit_of_measurement: 'PPM'
+    accuracy_decimals: 0    
+    lambda: return (133.42*(id(temp_comp_v).state)*(id(temp_comp_v).state)*(id(temp_comp_v).state) - 255.86*(id(temp_comp_v).state)*(id(temp_comp_v).state) + 857.39*(id(temp_comp_v).state))*0.5;
+    update_interval: never
+
+  - platform: template
+    name: "TDS Calibrated"
+    id: tds_calibrated
+    icon: "hass:water-opacity"
+    unit_of_measurement: 'PPM'
+    accuracy_decimals: 0    
+    lambda: return (133.42*(id(temp_comp_v).state)*(id(temp_comp_v).state)*(id(temp_comp_v).state) - 255.86*(id(temp_comp_v).state)*(id(temp_comp_v).state) + 857.39*(id(temp_comp_v).state))*0.5;
+    filters:
+    - calibrate_linear:
+        - 22 -> 22
+        - 1040 -> 700
+    - sliding_window_moving_average:
+        window_size: 5
+        send_every: 1
+    update_interval: never
+
+switch:
+  - platform: gpio
+    pin:
+      number: D3
+      inverted: true
+    id: ntc_gnd
+    internal: true
+
+display:
+  - platform: tm1637
+    id: aquarium_ph_display
+    clk_pin: D6
+    dio_pin: D7
+    lambda: |-
+      it.printf(0, "%.1f", id(aquarium_ph).state);
+
+interval:
+- interval: 12s
+  then:
+    - switch.turn_on: ntc_gnd
+    - component.update: tds_raw
+    - component.update: temp_comp_v
+    - component.update: temp_raw
+    - component.update: tds_uncalibrated
+    - component.update: tds_calibrated
+    - switch.turn_off: ntc_gnd

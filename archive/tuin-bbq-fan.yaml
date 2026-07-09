@@ -1,0 +1,79 @@
+esphome:
+  name: tuin-bbq-fan
+  friendly_name: BBQ Fan Controller
+
+esp8266:
+  board: d1_mini
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: NONE
+  post_connect_roaming: false
+  reboot_timeout: 0s
+
+logger:
+
+api:
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# --- FAN OUTPUT ---
+# IRLZ44N op pin D7: Gate via 100Ω, 10kΩ pulldown naar GND
+# 2200µF + 1N4007 parallel over fan voor smoothing en flyback
+output:
+  - platform: esp8266_pwm
+    pin: D7
+    id: bbq_fan_output
+    frequency: 1000Hz
+    min_power: 0.90
+    zero_means_zero: true
+
+fan:
+  - platform: speed
+    output: bbq_fan_output
+    name: "BBQ Fan"
+    id: bbq_fan
+    restore_mode: ALWAYS_OFF
+
+# --- TEMPERATUUR VIA IGRILL IN HA ---
+sensor:
+  - platform: homeassistant
+    id: bbq_koepel_temp
+    entity_id: sensor.bbq_koepel_temperatuur
+
+# --- PID THERMOSTAAT ---
+climate:
+  - platform: pid
+    name: "BBQ Thermostaat"
+    id: bbq_thermostaat
+    sensor: bbq_koepel_temp
+    default_target_temperature: 120°C
+    heat_output: bbq_fan_output
+    control_parameters:
+      kp: 0.3
+      ki: 0.0015
+      kd: 0.0
+    deadband_parameters:
+      threshold_high: 5.0°C
+      threshold_low: -5.0°C
+
+# --- VEILIGHEID: PID en fan uit als iGrill wegvalt ---
+# Alleen als de PID actief is (heat mode), niet bij handmatig testen
+interval:
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            lambda: 'return isnan(id(bbq_koepel_temp).state) && id(bbq_thermostaat).mode == climate::CLIMATE_MODE_HEAT;'
+          then:
+            - climate.control:
+                id: bbq_thermostaat
+                mode: 'OFF'
+            - fan.turn_off: bbq_fan
+            - logger.log: "iGrill sensor niet beschikbaar - PID uitgeschakeld"

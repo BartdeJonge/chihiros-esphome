@@ -1,0 +1,295 @@
+substitutions:
+  device_name: bbq-controller
+
+esphome:
+  name: ${device_name}
+  friendly_name: BBQ Controller
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: NONE
+  post_connect_roaming: false
+  reboot_timeout: 0s
+
+logger:
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret encryption_key
+  on_client_connected:
+    - globals.set:
+        id: ha_connected
+        value: 'true'
+    - component.update: bbq_display
+  on_client_disconnected:
+    - globals.set:
+        id: ha_connected
+        value: 'false'
+    - component.update: bbq_display
+
+globals:
+  - id: ha_connected
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# ── iGrill BLE (tijdelijk uitgeschakeld voor test) ───────────────────────────
+# external_components:
+#   - source: github://bendikwa/esphome-igrill@v1.4
+# esp32_ble_tracker:
+#   scan_parameters:
+#     interval: 1100ms
+#     window: 1100ms
+#     active: true
+# ble_client:
+#   - mac_address: "70:91:8F:1D:F2:3D"
+#     id: igrill_v2
+
+# ── Blower ──────────────────────────────────────────────────────────────────
+output:
+  - platform: esp32_dac
+    pin: GPIO25
+    id: blower_dac
+    inverted: true            # DAC 0% = blower uit, 100% = volle snelheid
+
+  - platform: gpio
+    pin: GPIO27
+    id: blower_enable_output
+    inverted: true            # GPIO27 LOW = LM2596 pin5 LOW = converter aan
+
+fan:
+  - platform: speed
+    output: blower_dac
+    name: "BBQ Fan"
+    id: bbq_fan
+    speed_count: 100
+    on_turn_on:
+      - output.turn_on: blower_enable_output
+    on_turn_off:
+      - output.turn_off: blower_enable_output
+
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+
+display:
+  - platform: waveshare_epaper
+    cs_pin: GPIO5
+    dc_pin: GPIO17
+    busy_pin: GPIO4
+    reset_pin: GPIO16
+    id: bbq_display
+    model: 2.13in-ttgo-dke
+    rotation: 270°
+    update_interval: 60s
+    lambda: |-
+      it.fill(COLOR_OFF);
+
+      auto clamp01 = [](float v) -> float {
+        return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+      };
+      auto draw_bar = [&](int x, int y, int w, int h, float pct) {
+        it.rectangle(x, y, w, h);
+        int fill = (int)(w * pct);
+        if (fill > 0) it.filled_rectangle(x, y, fill, h);
+      };
+      auto short_name = [](const std::string& menu, const char* fallback) -> const char* {
+        if (menu.find("Pulled Pork") != std::string::npos) return "Pork";
+        if (menu.find("Spareribs")   != std::string::npos) return "Ribs";
+        if (menu.find("Kip")         != std::string::npos) return "Kip";
+        return fallback;
+      };
+      auto probe_klaar = [](float temp, float doel) -> bool {
+        return !isnan(temp) && doel > 30.0f && temp >= doel;
+      };
+
+      // --- Geen HA verbinding ---
+      if (!id(ha_connected)) {
+        it.printf(10, 35, id(f_med), "Geen HA-verbinding");
+        it.printf(10, 60, id(f_small), "${device_name}");
+        return;
+      }
+
+      // --- iGrill niet verbonden ---
+      // Koepel zit ook op de iGrill (probe 1) → alle temps NaN.
+      // Alleen fan% (apart apparaat) is nog beschikbaar.
+      if (!id(igrill_verbindingsstatus).state) {
+        bool fan_ok = !isnan(id(fan_pct).state);
+        if (fan_ok) {
+          it.printf(165, 0, id(f_big), "%.0f%%", id(fan_pct).state);
+        } else {
+          it.print(165, 0, id(f_big), "--%");
+        }
+        it.printf(10, 45, id(f_med), "iGrill offline");
+        return;
+      }
+
+      bool p2_klaar = probe_klaar(id(vlees_p2).state, id(doel_p2).state);
+      bool p3_klaar = probe_klaar(id(vlees_p3).state, id(doel_p3).state);
+      bool p4_klaar = probe_klaar(id(vlees_p4).state, id(doel_p4).state);
+
+      // --- KLAAR scherm ---
+      if (p2_klaar || p3_klaar || p4_klaar) {
+        const char* naam = p2_klaar ? short_name(id(menu_p2).state, "P2")
+                         : p3_klaar ? short_name(id(menu_p3).state, "P3")
+                                    : short_name(id(menu_p4).state, "P4");
+        float temp = p2_klaar ? id(vlees_p2).state
+                   : p3_klaar ? id(vlees_p3).state
+                              : id(vlees_p4).state;
+        it.printf(10, 15, id(f_klaar), "KLAAR!");
+        it.printf(10, 72, id(f_med),   "%s: %.0f\xc2\xb0", naam, temp);
+        return;
+      }
+
+      // --- KOEPEL links (y=0..44) ---
+      bool koepel_ok = !isnan(id(koepel_temp).state);
+      if (koepel_ok) {
+        it.printf(0, 0, id(f_big), "%.0f\xc2\xb0", id(koepel_temp).state);
+      } else {
+        it.print(0, 0, id(f_big), "--\xc2\xb0");
+      }
+      it.printf(0, 33, id(f_small), "\xc2\xbb %.0f\xc2\xb0", id(doel_koepel).state);
+      float kp = (koepel_ok && id(doel_koepel).state > 0)
+        ? clamp01(id(koepel_temp).state / id(doel_koepel).state) : 0.0f;
+      draw_bar(75, 37, 75, 5, kp);
+
+      // --- FAN + timer rechts (y=0..44) ---
+      bool fan_ok = !isnan(id(fan_pct).state);
+      if (fan_ok) {
+        it.printf(165, 0, id(f_big), "%.0f%%", id(fan_pct).state);
+      } else {
+        it.print(165, 0, id(f_big), "--%");
+      }
+      it.printf(165, 33, id(f_small), "%s", id(kook_duur).state.c_str());
+
+      it.line(0, 50, 250, 50);
+
+      // --- PROBE RIJEN (y=54/76/98, elk 22px) ---
+      auto draw_probe = [&](const char* label, float temp, float doel, int y) {
+        bool ok = !isnan(temp);
+        it.print(0, y, id(f_med), label);
+        if (ok) {
+          it.printf(50, y, id(f_med), "%.0f\xc2\xb0", temp);
+        } else {
+          it.print(50, y, id(f_med), "--\xc2\xb0");
+        }
+        it.printf(97, y, id(f_small), "/%.0f\xc2\xb0", doel);
+        float pct = (ok && doel > 0) ? clamp01(temp / doel) : 0.0f;
+        draw_bar(150, y + 4, 97, 7, pct);
+      };
+
+      draw_probe(short_name(id(menu_p2).state, "P2"), id(vlees_p2).state, id(doel_p2).state, 54);
+      draw_probe(short_name(id(menu_p3).state, "P3"), id(vlees_p3).state, id(doel_p3).state, 76);
+      draw_probe(short_name(id(menu_p4).state, "P4"), id(vlees_p4).state, id(doel_p4).state, 98);
+
+font:
+  - file: "gfonts://Roboto"
+    id: f_klaar
+    size: 48
+    glyphs: "KLARiboepsSt!0123456789° "
+  - file: "gfonts://Roboto"
+    id: f_big
+    size: 32
+    glyphs: "0123456789°%-. "
+  - file: "gfonts://Roboto"
+    id: f_med
+    size: 20
+    glyphs: "0123456789°ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz /-:%"
+  - file: "gfonts://Roboto"
+    id: f_small
+    size: 13
+    glyphs: "0123456789°ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz /-:%\xbb"
+
+sensor:
+  # ── iGrill probes (lokaal, geen HA-roundtrip) ──
+  - platform: igrill
+    ble_client_id: igrill_v2
+    update_interval: 30s
+    battery_level:
+      name: "Batterij"
+    temperature_probe1:
+      name: "Koepel Temperatuur"
+      id: koepel_temp
+      on_value:
+        then:
+          - component.update: bbq_display
+    temperature_probe2:
+      name: "Vlees P2"
+      id: vlees_p2
+    temperature_probe3:
+      name: "Vlees P3"
+      id: vlees_p3
+    temperature_probe4:
+      name: "Vlees P4"
+      id: vlees_p4
+
+  # ── Doeltemperaturen en fan% uit HA ──
+  - platform: homeassistant
+    id: doel_koepel
+    entity_id: input_number.bbq_doel_koepel
+    internal: true
+  - platform: homeassistant
+    id: fan_pct
+    entity_id: fan.bbq_controller_bbq_fan
+    attribute: percentage
+    internal: true
+  - platform: homeassistant
+    id: doel_p2
+    entity_id: input_number.bbq_doel_vlees_p2
+    internal: true
+  - platform: homeassistant
+    id: doel_p3
+    entity_id: input_number.bbq_doel_vlees_p3
+    internal: true
+  - platform: homeassistant
+    id: doel_p4
+    entity_id: input_number.bbq_doel_vlees_p4
+    internal: true
+
+binary_sensor:
+  - platform: template
+    name: "Verbindingsstatus"
+    id: igrill_verbindingsstatus
+    device_class: connectivity
+    lambda: |-
+      return id(igrill_v2).connected();
+
+text_sensor:
+  - platform: homeassistant
+    id: menu_p2
+    entity_id: input_select.bbq_menu_p2
+    internal: true
+  - platform: homeassistant
+    id: menu_p3
+    entity_id: input_select.bbq_menu_p3
+    internal: true
+  - platform: homeassistant
+    id: menu_p4
+    entity_id: input_select.bbq_menu_p4
+    internal: true
+  - platform: homeassistant
+    id: kook_duur
+    entity_id: sensor.bbq_kook_duur
+    internal: true

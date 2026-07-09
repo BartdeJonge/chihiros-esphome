@@ -1,0 +1,260 @@
+substitutions:
+  device_name: max-rolluik
+  ha_name: Max rolluik
+  door_entity: binary_sensor.max_raam_contact
+
+esphome:
+  name: '${device_name}'
+
+esp8266:
+  board: esp01_1m
+  restore_from_flash: true
+
+safe_mode:
+  disabled: true
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: NONE
+  post_connect_roaming: false
+  reboot_timeout: 0s
+
+logger:
+
+globals:
+  - id: offline_teller
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: ha_ooit_verbonden
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: gepland_herstart
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: contact_open
+    type: bool
+    restore_value: false
+    initial_value: 'true'  # veilige standaard: aannemen dat raam open is
+
+# --- NOODONTGRENDELING ---
+# Onverwachte disconnect → direct open.
+# Geplande herstart (HA zet switch voor shutdown) → wacht, vangnet 5 min.
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret encryption_key
+  on_client_connected:
+    - globals.set:
+        id: ha_ooit_verbonden
+        value: 'true'
+    - globals.set:
+        id: offline_teller
+        value: '0'
+    - globals.set:
+        id: gepland_herstart
+        value: 'false'
+  on_client_disconnected:
+    - globals.set:
+        id: offline_teller
+        value: '0'
+    - globals.set:
+        id: contact_open
+        value: 'true'
+    - delay: 1s
+    - if:
+        condition:
+          and:
+            - lambda: return id(ha_ooit_verbonden);
+            - lambda: return !id(gepland_herstart);
+            - not:
+                api.connected:
+        then:
+          - cover.open: blind
+
+interval:
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: return id(ha_ooit_verbonden);
+              - lambda: return id(gepland_herstart);
+              - not:
+                  api.connected:
+          then:
+            - globals.set:
+                id: offline_teller
+                value: !lambda return id(offline_teller) + 1;
+            - if:
+                condition:
+                  lambda: return id(offline_teller) >= 10;  # 10x 30s = 5 minuten
+                then:
+                  - cover.open: blind
+                  - globals.set:
+                      id: offline_teller
+                      value: '0'
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+i2c:
+  sda: GPIO12
+  scl: GPIO14
+
+sensor:
+  - platform: ade7953_i2c
+    irq_pin: GPIO16
+    voltage:
+      name: Voltage
+      internal: true
+      filters:
+        - throttle: 5s
+    current_a:
+      name: Close Current
+      id: close_current
+      internal: true
+    current_b:
+      name: Open Current
+      id: open_current
+      internal: true
+    update_interval: 5s
+
+  - platform: ntc
+    sensor: temp_resistance_reading
+    name: Temperature
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    calibration:
+      b_constant: 3350
+      reference_resistance: 10kOhm
+      reference_temperature: 298.15K
+    on_value_range:
+      above: 90
+      then:
+        - switch.turn_on: _shutdown
+
+  - platform: resistance
+    id: temp_resistance_reading
+    sensor: temp_analog_reading
+    configuration: DOWNSTREAM
+    resistor: 32kOhm
+    internal: true
+
+  - platform: adc
+    id: temp_analog_reading
+    pin: A0
+    update_interval: 30s
+    internal: true
+
+binary_sensor:
+  - platform: homeassistant
+    id: contact_sensor
+    name: Raam open
+    entity_id: ${door_entity}
+    internal: true
+    on_state:
+      - globals.set:
+          id: contact_open
+          value: !lambda return x;
+      - if:
+          condition:
+            lambda: return id(contact_open);
+          then:
+            - if:
+                condition:
+                  lambda: return id(blind).current_operation == esphome::cover::COVER_OPERATION_CLOSING;
+                then:
+                  - cover.stop: blind
+
+  - platform: gpio
+    pin:
+      number: GPIO13
+    name: Knop open
+    on_press:
+      then:
+        - cover.open: blind
+
+  - platform: gpio
+    pin:
+      number: GPIO5
+    name: Knop sluit
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: return !id(contact_open);
+            then:
+              - cover.close: blind
+
+switch:
+  - platform: shutdown
+    id: _shutdown
+    name: Shutdown
+    internal: true
+
+  - platform: gpio
+    id: open_relay
+    name: Open Relay
+    pin: GPIO4
+    restore_mode: RESTORE_DEFAULT_OFF
+    interlock: &interlock [open_relay, close_relay]
+    interlock_wait_time: 200ms
+    internal: true
+
+  - platform: gpio
+    id: close_relay
+    name: Close Relay
+    pin: GPIO15
+    restore_mode: RESTORE_DEFAULT_OFF
+    interlock: *interlock
+    interlock_wait_time: 200ms
+    internal: true
+
+  - platform: template
+    name: Gepland herstart
+    id: gepland_herstart_switch
+    lambda: return id(gepland_herstart);
+    turn_on_action:
+      - globals.set:
+          id: gepland_herstart
+          value: 'true'
+    turn_off_action:
+      - globals.set:
+          id: gepland_herstart
+          value: 'false'
+
+cover:
+  - platform: time_based
+    name: Blind
+    id: blind
+    open_duration: 21s
+    open_action:
+      - switch.turn_off: close_relay
+      - switch.turn_on: open_relay
+    close_duration: 20s
+    close_action:
+      - if:
+          condition:
+            lambda: return !id(contact_open);
+          then:
+            - switch.turn_off: open_relay
+            - switch.turn_on: close_relay
+          else:
+            - cover.stop: blind
+            - delay: 500ms
+            - cover.open: blind
+    stop_action:
+      - switch.turn_off: close_relay
+      - switch.turn_off: open_relay
+
+status_led:
+  pin:
+    number: GPIO0
+    inverted: yes

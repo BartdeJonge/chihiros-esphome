@@ -1,0 +1,46 @@
+esphome:
+  name: 'test-ethernet'
+
+esp32:
+  board: wemos_d1_mini32
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/trombik/esphome-component-ping
+      ref: main
+
+logger:
+
+api:
+  encryption:
+    key: !secret encryption_key
+
+ethernet:
+  type: LAN8720
+  mdc_pin: GPIO23
+  mdio_pin: GPIO18
+  clk_mode: GPIO17_OUT
+  phy_addr: 0
+    
+ota:
+  password: !secret ota_password
+  
+web_server:
+  port: 80
+
+text_sensor:
+  - platform: ethernet_info
+    ip_address:
+      name: ESP IP Address
+
+sensor:
+  - platform: ping
+    ip_address: 8.8.8.8
+    num_attempts: 4
+    timeout: 1sec
+    loss:
+      name: Packet loss
+    latency:
+      name: Latency
+      accuracy_decimals: 3

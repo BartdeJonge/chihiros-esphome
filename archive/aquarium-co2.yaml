@@ -1,0 +1,225 @@
+# --- SAMENVATTING ---
+# Chihiros CO2 controller BLE bridge
+# - Verbindt via BLE met MAC CC:A0:27:8E:79:E9 (Nordic UART Service)
+# - Protocol: Chihiros Magic Commander, CRC = XOR van frame-bytes
+# - Bij connect: auth → RTC sync → schema versturen
+# - Schema: cmd=0x16 [uur, 0, intensiteit] voor start + eind
+# - Start/eind uur instelbaar via input_number.aquarium_co2_start/eind_uur in HA
+# - Controller werkt autonoom op intern schema; ESP32 synct bij elke reconnect
+
+substitutions:
+  name: aquarium-co2
+  friendly_name: aquarium-co2
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: mhetesp32devkit
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+globals:
+  - id: cmd_seq
+    type: uint8_t
+    restore_value: false
+    initial_value: '1'
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+    interval: 320ms
+    window: 320ms
+    continuous: true
+  on_ble_advertise:
+    - mac_address: CC:A0:27:8E:79:E9
+      then:
+        - lambda: |-
+            ESP_LOGI("co2", "CO2 controller gevonden! RSSI=%d", x.get_rssi());
+
+ble_client:
+  - mac_address: CC:A0:27:8E:79:E9
+    id: chihiros_co2
+    on_connect:
+      then:
+        - delay: 500ms
+        # Auth
+        - ble_client.ble_write:
+            id: chihiros_co2
+            service_uuid: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+            characteristic_uuid: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+            value: !lambda |-
+              uint8_t seq = id(cmd_seq)++;
+              std::vector<uint8_t> frame = {0x01, 0x06, 0x00, seq, 0x04, 0x01};
+              uint8_t crc = 0;
+              for (auto b : frame) crc ^= b;
+              std::vector<uint8_t> packet = {0x5a};
+              packet.insert(packet.end(), frame.begin(), frame.end());
+              packet.push_back(crc);
+              ESP_LOGI("co2", "Auth seq=0x%02x", seq);
+              return packet;
+        - delay: 200ms
+        # RTC sync
+        - ble_client.ble_write:
+            id: chihiros_co2
+            service_uuid: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+            characteristic_uuid: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+            value: !lambda |-
+              auto t = id(ha_time).now();
+              uint8_t seq = id(cmd_seq)++;
+              std::vector<uint8_t> frame = {0x01, 0x0b, 0x00, seq, 0x09,
+                  (uint8_t)(t.year - 2000), (uint8_t)t.month, (uint8_t)t.day_of_month,
+                  (uint8_t)t.hour, (uint8_t)t.minute, (uint8_t)t.second};
+              uint8_t crc = 0;
+              for (auto b : frame) crc ^= b;
+              std::vector<uint8_t> packet = {0x5a};
+              packet.insert(packet.end(), frame.begin(), frame.end());
+              packet.push_back(crc);
+              ESP_LOGI("co2", "RTC sync %04d-%02d-%02d %02d:%02d:%02d",
+                  t.year, t.month, t.day_of_month, t.hour, t.minute, t.second);
+              return packet;
+        - delay: 200ms
+        - script.execute: stuur_schema
+    on_disconnect:
+      then:
+        - logger.log: "Chihiros CO2 verbinding verbroken — herverbinding volgt automatisch"
+
+script:
+  - id: stuur_schema
+    then:
+      # Start-tijd: CO2 aan met intensiteit 100
+      - ble_client.ble_write:
+          id: chihiros_co2
+          service_uuid: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+          characteristic_uuid: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+          value: !lambda |-
+            uint8_t seq = id(cmd_seq)++;
+            uint8_t h = (uint8_t)id(co2_start_uur).state;
+            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, 0x00, 0x64};
+            uint8_t crc = 0;
+            for (auto b : frame) crc ^= b;
+            std::vector<uint8_t> packet = {0x5a};
+            packet.insert(packet.end(), frame.begin(), frame.end());
+            packet.push_back(crc);
+            ESP_LOGI("co2", "Schema start=%02d:00 intensiteit=100", h);
+            return packet;
+      - delay: 100ms
+      # Eind-tijd: CO2 uit (intensiteit 0)
+      - ble_client.ble_write:
+          id: chihiros_co2
+          service_uuid: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+          characteristic_uuid: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+          value: !lambda |-
+            uint8_t seq = id(cmd_seq)++;
+            uint8_t h = (uint8_t)id(co2_eind_uur).state;
+            std::vector<uint8_t> frame = {0x01, 0x08, 0x00, seq, 0x16, h, 0x00, 0x00};
+            uint8_t crc = 0;
+            for (auto b : frame) crc ^= b;
+            std::vector<uint8_t> packet = {0x5a};
+            packet.insert(packet.end(), frame.begin(), frame.end());
+            packet.push_back(crc);
+            ESP_LOGI("co2", "Schema eind=%02d:00 intensiteit=0", h);
+            return packet;
+
+switch:
+  - platform: ble_client
+    ble_client_id: chihiros_co2
+    name: Verbinding
+    id: co2_connect
+
+button:
+  - platform: template
+    name: Schema versturen
+    icon: mdi:send-clock
+    on_press:
+      - if:
+          condition:
+            switch.is_on: co2_connect
+          then:
+            - script.execute: stuur_schema
+          else:
+            - logger.log:
+                level: WARN
+                format: "Schema versturen: geen BLE verbinding"
+
+sensor:
+  - platform: homeassistant
+    id: co2_start_uur
+    entity_id: input_number.aquarium_co2_start_uur
+    on_value:
+      then:
+        - if:
+            condition:
+              switch.is_on: co2_connect
+            then:
+              - script.execute: stuur_schema
+
+  - platform: homeassistant
+    id: co2_eind_uur
+    entity_id: input_number.aquarium_co2_eind_uur
+    on_value:
+      then:
+        - if:
+            condition:
+              switch.is_on: co2_connect
+            then:
+              - script.execute: stuur_schema
+
+  - platform: ble_client
+    type: rssi
+    ble_client_id: chihiros_co2
+    name: RSSI
+    update_interval: 30s
+
+  # Notificaties van de controller (cmd=0x0a statusbericht)
+  # Frame: 5b 03 0a 00 01 0a [staat] ff ff ff ff 00 00 crc
+  # staat byte [6]: 0x01=aan, 0x00=uit (te bevestigen)
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: chihiros_co2
+    service_uuid: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+    characteristic_uuid: "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+    id: co2_status_raw
+    name: CO2 Status
+    notify: true
+    unit_of_measurement: ""
+    lambda: |-
+      ESP_LOGI("co2", "Notificatie: %s",
+          [&](){
+            std::string s;
+            for (auto b : x) { char buf[4]; snprintf(buf, sizeof(buf), "%02x ", b); s += buf; }
+            return s;
+          }().c_str());
+      if (x.size() >= 7) return (float)x[6];
+      return NAN;
+
+binary_sensor:
+  - platform: template
+    name: CO2 Actief
+    id: co2_actief
+    device_class: running
+    lambda: |-
+      if (isnan(id(co2_status_raw).state)) return false;
+      return id(co2_status_raw).state == 1.0;

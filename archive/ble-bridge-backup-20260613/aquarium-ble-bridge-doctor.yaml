@@ -1,0 +1,232 @@
+# --- DOCTOR MATE ---
+#
+# De Chihiros Doctor Mate meet waterkwaliteit (EC/TDS) en doseert automatisch.
+#
+# Verbindingsvolgorde bij elke BLE-connect:
+#   1. Auth        — standaard Chihiros handshake (0xa5)
+#   2. RTC sync    — klok synchroniseren (0x5a)
+#   3. TDS target  — doelwaarde EC in µS/cm, cmd=0x01 data=[0x00, ec] (positie 1)
+#   4. Volume      — tankinhoud in liters × 2, cmd=0x01 data=[0x00, vol] (positie 2)
+#
+# BELANGRIJK: TDS en Volume hebben exact hetzelfde frameformaat (cmd=0x01, data[0]=0x00).
+# Het apparaat onderscheidt ze UITSLUITEND op volgorde: 1e = TDS, 2e = Volume.
+# Altijd beide sturen bij elke settings-update, altijd in deze volgorde.
+#
+# EC encoding: µS/cm = ppm / 0.4  (100 ppm = 250 µS/cm = 0xfa, max ~102 ppm)
+# Volume encoding: liters × 2     (50 L = 0x64, 100 L = 0xc8, max ~127 L)
+#
+# Profielen (TDS presets):
+#   Plant:   80 ppm → EC 200 µS/cm → 0xc8
+#   Vis:     93 ppm → EC 233 µS/cm → 0xe9
+#   Garnaal: 66 ppm → EC 166 µS/cm → 0xa6
+#
+# Notificaties van het apparaat (na auth):
+#   byte[5] = EC meting (µS/cm) — vermoedelijk, bevestig via logs
+
+globals:
+  - id: cmd_seq_doctor
+    type: uint8_t
+    restore_value: false
+    initial_value: '1'
+
+  - id: doctor_rtc_only
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+ble_client:
+  - mac_address: ${doctor_mac}
+    id: chihiros_doctor
+    on_connect:
+      then:
+        - delay: 500ms
+        # Doctor gebruikt 0xa5 (DEVICE) voor auth, niet de standaard 0x5a
+        - logger.log: "doctor: Auth"
+        - ble_client.ble_write:
+            id: chihiros_doctor
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth_device(id(cmd_seq_doctor)++);
+        - delay: 200ms
+        - if:
+            condition:
+              lambda: return id(doctor_rtc_only);
+            then:
+              # RTC sync only — geen config
+              - logger.log:
+                  format: "doctor: RTC sync %04d-%02d-%02d %02d:%02d:%02d"
+                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
+              - ble_client.ble_write:
+                  id: chihiros_doctor
+                  service_uuid: ${ble_service}
+                  characteristic_uuid: ${ble_tx}
+                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_doctor)++);
+              - delay: 200ms
+              - globals.set:
+                  id: doctor_rtc_only
+                  value: 'false'
+              - switch.turn_off: doctor_verbinding
+              - logger.log: "doctor: RTC sync klaar"
+            else:
+              # Volledige config: RTC → TDS → volume
+              - logger.log:
+                  format: "doctor: RTC %04d-%02d-%02d %02d:%02d:%02d"
+                  args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
+              - ble_client.ble_write:
+                  id: chihiros_doctor
+                  service_uuid: ${ble_service}
+                  characteristic_uuid: ${ble_tx}
+                  value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_doctor)++);
+              - delay: 200ms
+              - script.execute: stuur_doctor_instellingen
+              - script.wait: stuur_doctor_instellingen
+              - delay: 200ms
+              - switch.turn_off: doctor_verbinding
+              - logger.log: "doctor: instellingen verstuurd, verbinding verbroken"
+    on_disconnect:
+      then:
+        - logger.log: "doctor: verbinding verbroken"
+
+script:
+  - id: doctor_verbind_als_klaar
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - switch.turn_on: doctor_verbinding
+
+  # TDS (positie 1) gevolgd door Volume (positie 2) — volgorde essentieel.
+  # Apparaat onderscheidt de twee writes ALLEEN op volgorde, het frameformaat is identiek.
+  - id: stuur_doctor_instellingen
+    then:
+      # TDS → EC-waarde in µS/cm (ppm / 0.4), past in één byte
+      - logger.log:
+          format: "doctor: TDS %d ppm → EC 0x%02x"
+          args: ["(int)id(num_doctor_tds).state", "(uint8_t)roundf(id(num_doctor_tds).state / 0.4f)"]
+      - ble_client.ble_write:
+          id: chihiros_doctor
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda return chihiros::device_settings(0x00, (uint8_t)roundf(id(num_doctor_tds).state / 0.4f), id(cmd_seq_doctor)++);
+      - delay: 200ms
+      # Volume → liters × 2, past in één byte
+      - logger.log:
+          format: "doctor: volume %d L → 0x%02x"
+          args: ["(int)id(num_doctor_volume).state", "(uint8_t)(id(num_doctor_volume).state * 2.0f)"]
+      - ble_client.ble_write:
+          id: chihiros_doctor
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda return chihiros::device_settings(0x00, (uint8_t)(id(num_doctor_volume).state * 2.0f), id(cmd_seq_doctor)++);
+      - logger.log: "doctor: instellingen gestuurd"
+
+switch:
+  - platform: ble_client
+    ble_client_id: chihiros_doctor
+    id: doctor_verbinding
+    internal: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+button:
+  - platform: template
+    name: "Doctor Mate RTC sync"
+    id: btn_doctor_rtc_sync
+    icon: mdi:clock-sync
+    on_press:
+      - globals.set:
+          id: doctor_rtc_only
+          value: 'true'
+      - script.execute: doctor_verbind_als_klaar
+
+number:
+  - platform: template
+    name: "Doctor Mate TDS"
+    id: num_doctor_tds
+    min_value: 10
+    max_value: 200
+    step: 1
+    initial_value: 130
+    restore_value: false
+    icon: mdi:water-check
+    unit_of_measurement: "ppm"
+    optimistic: true
+    on_value:
+      - script.execute: doctor_verbind_als_klaar
+
+  - platform: template
+    name: "Doctor Mate volume"
+    id: num_doctor_volume
+    min_value: 10
+    max_value: 127
+    step: 1
+    initial_value: 125
+    restore_value: true
+    icon: mdi:water
+    unit_of_measurement: "L"
+    optimistic: true
+    on_value:
+      - script.execute: doctor_verbind_als_klaar
+
+select:
+  - platform: template
+    name: "Doctor Mate profiel"
+    id: sel_doctor_profiel
+    icon: mdi:fish
+    restore_value: true
+    optimistic: true
+    options:
+      - "Plant (80 ppm)"
+      - "Vis (93 ppm)"
+      - "Garnaal (66 ppm)"
+      - "Manueel"
+    initial_option: "Manueel"
+    on_value:
+      # Profiel-keuze past de TDS-waarde aan; num_doctor_tds.on_value triggert daarna de verbinding
+      - if:
+          condition:
+            lambda: return x == "Plant (80 ppm)";
+          then:
+            - number.set:
+                id: num_doctor_tds
+                value: 80
+      - if:
+          condition:
+            lambda: return x == "Vis (93 ppm)";
+          then:
+            - number.set:
+                id: num_doctor_tds
+                value: 93
+      - if:
+          condition:
+            lambda: return x == "Garnaal (66 ppm)";
+          then:
+            - number.set:
+                id: num_doctor_tds
+                value: 66
+
+sensor:
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: chihiros_doctor
+    service_uuid: ${ble_service}
+    characteristic_uuid: ${ble_rx}
+    id: doctor_notificatie
+    name: "Doctor Mate Notificatie"
+    notify: true
+    internal: true
+    unit_of_measurement: ""
+    lambda: |-
+      ESP_LOGI("doctor", "Notificatie (%d bytes): %s", (int)x.size(), chihiros::hex_dump(x).c_str());
+      if (x.size() >= 6 && x[5] > 0 && x[5] != 0xff) {
+        id(sensor_doctor_ec).publish_state((float)x[5]);
+      }
+      return NAN;
+
+  - platform: template
+    id: sensor_doctor_ec
+    name: "Doctor Mate EC"
+    unit_of_measurement: "µS/cm"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: mdi:water-percent

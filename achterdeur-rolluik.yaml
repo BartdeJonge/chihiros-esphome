@@ -1,0 +1,294 @@
+substitutions:
+  device_name: achterdeur
+  ha_name: Achterdeur rolluik
+  # GPIO verschilt per PCB versie — zie commentaar hieronder
+  # v0.1.5: button=GPIO27, sw1=GPIO2, sw2=GPIO18, irq=GPIO36, temp=GPIO37, sda=GPIO33, scl=GPIO25
+  # v0.1.9: button=GPIO4,  sw1=GPIO5, sw2=GPIO18, irq=GPIO27, temp=GPIO35, sda=GPIO26, scl=GPIO25
+  button_pin:  GPIO4   # v0.1.9 — v0.1.5: GPIO27
+  sw1_pin:     GPIO5   # v0.1.9 — v0.1.5: GPIO2
+  sw2_pin:     GPIO18
+  irq_pin:     GPIO27  # v0.1.9 — v0.1.5: GPIO36
+  temp_pin:    GPIO35  # v0.1.9 — v0.1.5: GPIO37
+  i2c_sda:     GPIO26  # v0.1.9 — v0.1.5: GPIO33
+  i2c_scl:     GPIO25
+
+esphome:
+  name: '${device_name}'
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    advanced:
+      minimum_chip_revision: "3.1"
+      sram1_as_iram: true
+
+safe_mode:
+  disabled: true
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: NONE
+  reboot_timeout: 0s
+
+logger:
+  baud_rate: 0
+
+globals:
+  - id: offline_teller
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: ha_ooit_verbonden
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: gepland_herstart
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: deur_open
+    type: bool
+    restore_value: false
+    initial_value: 'true'  # veilige standaard: aannemen dat deur open is
+
+# --- NOODONTGRENDELING LOGICA ---
+# Drie scenario's:
+#
+# 1. HA valt onverwacht weg (gepland_herstart = false)
+#    → Rolluik opent DIRECT bij disconnect. Geen wachttijd.
+#
+# 2. HA herstart gepland (HA zet gepland_herstart = true via switch vóór shutdown)
+#    → Bij disconnect gebeurt er niets.
+#    → Als HA na 5 minuten nog steeds weg is → open alsnog (iets ging fout).
+#    → Als HA terugkomt → gepland_herstart automatisch gecleared via on_client_connected.
+#
+# 3. ESPHome boot zonder HA (ha_ooit_verbonden = false)
+#    → Teller start nooit, rolluik blijft stil.
+#
+# HA-kant: automation systeem/rolluik_herstart_veiligheid.yaml beheert de switch.
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret encryption_key
+  on_client_connected:
+    - globals.set:
+        id: ha_ooit_verbonden
+        value: 'true'
+    - globals.set:
+        id: offline_teller
+        value: '0'
+    - globals.set:
+        id: gepland_herstart
+        value: 'false'
+    # deur_open wordt bijgewerkt via on_state zodra HA de staat pusht
+  on_client_disconnected:
+    - globals.set:
+        id: offline_teller
+        value: '0'
+    - delay: 1s
+    - if:
+        condition:
+          and:
+            - lambda: return id(ha_ooit_verbonden);
+            - lambda: return !id(gepland_herstart);
+            - not:
+                api.connected:
+        then:
+          - cover.open: rolluik
+
+# Vangnet scenario 2: gepland herstart maar HA komt niet terug binnen 5 min
+interval:
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: return id(ha_ooit_verbonden);
+              - lambda: return id(gepland_herstart);
+              - not:
+                  api.connected:
+          then:
+            - globals.set:
+                id: offline_teller
+                value: !lambda return id(offline_teller) + 1;
+            - if:
+                condition:
+                  lambda: return id(offline_teller) >= 10;  # 10x 30s = 5 minuten
+                then:
+                  - cover.open: rolluik
+                  - globals.set:
+                      id: offline_teller
+                      value: '0'
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+i2c:
+  sda: ${i2c_sda}
+  scl: ${i2c_scl}
+
+sensor:
+  - platform: ade7953_i2c
+    irq_pin: ${irq_pin}
+    voltage:
+      name: Spanning
+      internal: true
+      filters:
+        - throttle: 5s
+    current_a:
+      name: Stroom open
+      id: stroom_open
+      filters:
+        - throttle: 1s
+    current_b:
+      name: Stroom sluit
+      id: stroom_sluit
+      filters:
+        - throttle: 1s
+    active_power_a:
+      name: Vermogen open
+      filters:
+        - throttle: 5s
+    active_power_b:
+      name: Vermogen sluit
+      filters:
+        - throttle: 5s
+    update_interval: 1s
+
+  - platform: ntc
+    sensor: temp_resistance
+    name: Temperatuur
+    calibration:
+      b_constant: 3350
+      reference_resistance: 10kOhm
+      reference_temperature: 298.15K
+    on_value_range:
+      above: 90
+      then:
+        - switch.turn_off: open_relay
+        - switch.turn_off: sluit_relay
+
+  - platform: resistance
+    id: temp_resistance
+    sensor: temp_adc
+    configuration: DOWNSTREAM
+    resistor: 10kOhm
+    internal: true
+
+  - platform: adc
+    id: temp_adc
+    pin: ${temp_pin}
+    attenuation: 12db
+    update_interval: 30s
+    internal: true
+
+binary_sensor:
+  - platform: homeassistant
+    id: achterdeur_open
+    entity_id: binary_sensor.achterdeur_contact
+    internal: true
+    on_state:
+      - globals.set:
+          id: deur_open
+          value: !lambda return x;
+      - if:
+          condition:
+            lambda: return id(deur_open);
+          then:
+            - if:
+                condition:
+                  lambda: return id(rolluik).current_operation == esphome::cover::COVER_OPERATION_CLOSING;
+                then:
+                  - cover.stop: rolluik
+
+  - platform: gpio
+    pin:
+      number: ${sw1_pin}
+      mode: INPUT_PULLUP
+      inverted: true
+    name: Knop open
+    on_press:
+      then:
+        - cover.open: rolluik
+
+  - platform: gpio
+    pin:
+      number: ${sw2_pin}
+      mode: INPUT_PULLUP
+      inverted: true
+    name: Knop sluit
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: return !id(deur_open);
+            then:
+              - cover.close: rolluik
+
+switch:
+  - platform: gpio
+    id: open_relay
+    name: Relay open
+    pin: GPIO12
+    restore_mode: RESTORE_DEFAULT_OFF
+    interlock: &interlock [open_relay, sluit_relay]
+    interlock_wait_time: 200ms
+    internal: true
+
+  - platform: gpio
+    id: sluit_relay
+    name: Relay sluit
+    pin: GPIO13
+    restore_mode: RESTORE_DEFAULT_OFF
+    interlock: *interlock
+    interlock_wait_time: 200ms
+    internal: true
+
+  - platform: template
+    name: Gepland herstart
+    id: gepland_herstart_switch
+    lambda: return id(gepland_herstart);
+    turn_on_action:
+      - globals.set:
+          id: gepland_herstart
+          value: 'true'
+    turn_off_action:
+      - globals.set:
+          id: gepland_herstart
+          value: 'false'
+
+cover:
+  - platform: current_based
+    name: Rolluik
+    id: rolluik
+    device_class: shutter
+    # Drempelwaarden aanpassen na eerste test:
+    # Kijk naar stroom_open/stroom_sluit tijdens rijden → stel threshold op ~70% van rijstroom
+    open_sensor: stroom_sluit
+    open_moving_current_threshold: 0.5
+    open_duration: 35s
+    close_sensor: stroom_open
+    close_moving_current_threshold: 0.5
+    close_duration: 35s
+    max_duration: 45s
+    start_sensing_delay: 1s
+    open_action:
+      - switch.turn_off: sluit_relay
+      - switch.turn_on: open_relay
+    close_action:
+      - if:
+          condition:
+            lambda: return !id(deur_open);
+          then:
+            - switch.turn_off: open_relay
+            - switch.turn_on: sluit_relay
+          else:
+            - cover.stop: rolluik
+    stop_action:
+      - switch.turn_off: open_relay
+      - switch.turn_off: sluit_relay

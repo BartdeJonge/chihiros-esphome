@@ -5,15 +5,17 @@
 # Verbindingsvolgorde bij elke BLE-connect:
 #   1. Auth        — standaard Chihiros handshake (0xa5)
 #   2. RTC sync    — klok synchroniseren (0x5a)
-#   3. TDS target  — doelwaarde EC in µS/cm, cmd=0x01 data=[0x00, ec] (positie 1)
-#   4. Volume      — tankinhoud in liters × 2, cmd=0x01 data=[0x00, vol] (positie 2)
+#   3. TDS target  — doelwaarde EC in µS/cm, cmd=0x01 data=[ec_hi, ec_lo] (positie 1)
+#   4. Volume      — tankinhoud in liters × 2, cmd=0x01 data=[vol_hi, vol_lo] (positie 2)
 #
-# BELANGRIJK: TDS en Volume hebben exact hetzelfde frameformaat (cmd=0x01, data[0]=0x00).
+# BELANGRIJK: TDS en Volume hebben exact hetzelfde frameformaat (cmd=0x01, 16-bit BE).
 # Het apparaat onderscheidt ze UITSLUITEND op volgorde: 1e = TDS, 2e = Volume.
 # Altijd beide sturen bij elke settings-update, altijd in deze volgorde.
 #
-# EC encoding: µS/cm = ppm / 0.4  (100 ppm = 250 µS/cm = 0xfa, max ~102 ppm)
-# Volume encoding: liters × 2     (50 L = 0x64, 100 L = 0xc8, max ~127 L)
+# EC encoding: µS/cm = ppm / 0.4, 16-bit big-endian (100 ppm = 250 = [0x00, 0xfa]).
+# High-byte > 0 (TDS > 102 ppm) is afgeleid uit de app-limieten, nog niet gesnift —
+# alle btsnoop-captures hadden hi=0x00. Bij twijfel: app op >102 ppm zetten en sniffen.
+# Volume encoding: liters × 2 (50 L = 0x64, 100 L = 0xc8)
 #
 # Profielen (TDS presets):
 #   Plant:   80 ppm → EC 200 µS/cm → 0xc8
@@ -27,6 +29,12 @@ globals:
   - id: doctor_device
     type: chihiros::DoctorDevice
     restore_value: false
+
+  # Epoch van de laatst afgeronde config-drain (zie CO2 voor toelichting)
+  - id: doctor_laatste_sync_ts
+    type: float
+    restore_value: true
+    initial_value: '0'
 
 ble_client:
   - mac_address: ${doctor_mac}
@@ -50,6 +58,11 @@ ble_client:
                   characteristic_uuid: ${ble_tx}
                   value: !lambda return id(doctor_device).next();
               - delay: 200ms
+        - lambda: |-
+            if (id(ntp_tijd).now().is_valid()) {
+              id(doctor_laatste_sync_ts) = id(ntp_tijd).now().timestamp;
+              id(doctor_laatste_sync).publish_state(id(doctor_laatste_sync_ts));
+            }
         - switch.turn_off: doctor_verbinding
         - logger.log: "doctor: klaar"
     on_disconnect:
@@ -85,8 +98,13 @@ button:
     id: btn_doctor_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - lambda: id(doctor_device).set_rtc_only();
-      - script.execute: doctor_verbind_als_klaar
+      # Vlag alleen zetten als er echt verbonden wordt (zie CO2 RTC sync)
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - lambda: id(doctor_device).set_rtc_only();
+            - script.execute: doctor_verbind_als_klaar
 
 number:
   - platform: template
@@ -96,7 +114,7 @@ number:
     max_value: 200
     step: 1
     initial_value: 130
-    restore_value: false
+    restore_value: true
     icon: mdi:water-check
     unit_of_measurement: "ppm"
     optimistic: true
@@ -179,3 +197,14 @@ sensor:
     state_class: measurement
     accuracy_decimals: 0
     icon: mdi:water-percent
+
+  - platform: template
+    id: doctor_laatste_sync
+    name: "Doctor Mate laatste sync"
+    device_class: timestamp
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 300s
+    lambda: |-
+      if (id(doctor_laatste_sync_ts) > 0) return id(doctor_laatste_sync_ts);
+      return NAN;

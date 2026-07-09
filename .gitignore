@@ -1,0 +1,27 @@
+# Gitignore settings for ESPHome
+# This is an example and may include too much for your use-case.
+# You can modify this file to suit your needs.
+/.esphome/
+/secrets.yaml
+__pycache__/
+
+# Losse build-cache-mappen (platformio.ini + src/main.cpp + src/esphome.h,
+# regenereerbaar via esphome compile) - geen echte broncode
+/_template/
+/calibrate/
+/tagreader/
+/aquarium_display/
+/aquarium_ph/
+/aquarium_temperature/
+/ble/
+/display_cabinet/
+/droger/
+/kamer_max_rgb/
+/slaapkamer_ble/
+/wasmachine/
+/weerstation/
+/woonkamer-rgb-3/
+/woonkamer-rgb-4/
+/woonkamer_ble/
+/woonkamer_tv_meubel/
+/hal_warm_water/

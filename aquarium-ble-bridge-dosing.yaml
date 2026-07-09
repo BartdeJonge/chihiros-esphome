@@ -10,14 +10,57 @@
 # Weekdays:     zelfde bitmask als WRGB2 — Ma=64 Di=32 Wo=16 Do=8 Vr=4 Za=2 Zo=1
 # Disable:      STIR_ENABLE met enable=false (0x00)
 #
-# dosing_actieve_actie:
-#   0 = schema update (alle 4 pompen)
-#   1 = handmatige dosis (dosing_actieve_pomp)
+# Per-pomp entities staan in aquarium-ble-bridge-dosing-pomp.yaml
+# (parameterized package, 4× ingevoegd hieronder).
+
+packages:
+  pomp1: !include
+    file: aquarium-ble-bridge-dosing-pomp.yaml
+    vars:
+      pomp: "1"
+      idx: "0"
+      vol_init: "1.0"
+      uur_init: "9"
+      weekdays_init: "127"
+      schema_restore: "RESTORE_DEFAULT_ON"
+  pomp2: !include
+    file: aquarium-ble-bridge-dosing-pomp.yaml
+    vars:
+      pomp: "2"
+      idx: "1"
+      vol_init: "10.0"
+      uur_init: "17"
+      weekdays_init: "88"
+      schema_restore: "RESTORE_DEFAULT_OFF"
+  pomp3: !include
+    file: aquarium-ble-bridge-dosing-pomp.yaml
+    vars:
+      pomp: "3"
+      idx: "2"
+      vol_init: "1.0"
+      uur_init: "9"
+      weekdays_init: "127"
+      schema_restore: "RESTORE_DEFAULT_OFF"
+  pomp4: !include
+    file: aquarium-ble-bridge-dosing-pomp.yaml
+    vars:
+      pomp: "4"
+      idx: "3"
+      vol_init: "1.0"
+      uur_init: "9"
+      weekdays_init: "127"
+      schema_restore: "RESTORE_DEFAULT_OFF"
 
 globals:
   - id: dosing_device
     type: chihiros::DosingDevice
     restore_value: false
+
+  # Epoch van de laatst afgeronde config-drain (zie CO2 voor toelichting)
+  - id: dosing_laatste_sync_ts
+    type: float
+    restore_value: true
+    initial_value: '0'
 
 ble_client:
   - mac_address: ${dosing_mac}
@@ -49,6 +92,11 @@ ble_client:
                   characteristic_uuid: ${ble_tx}
                   value: !lambda return id(dosing_device).next();
               - delay: 200ms
+        - lambda: |-
+            if (id(ntp_tijd).now().is_valid()) {
+              id(dosing_laatste_sync_ts) = id(ntp_tijd).now().timestamp;
+              id(dosing_laatste_sync).publish_state(id(dosing_laatste_sync_ts));
+            }
         - switch.turn_off: dosing_verbinding
         - logger.log: "dosing: klaar"
     on_disconnect:
@@ -78,307 +126,19 @@ switch:
     internal: true
     restore_mode: RESTORE_DEFAULT_OFF
 
-  - platform: template
-    name: "Dosing schema pomp 1"
-    id: sw_dosing_schema_p1
-    icon: mdi:calendar-clock
-    restore_mode: RESTORE_DEFAULT_ON
-    optimistic: true
-    on_turn_on:
-      - script.execute: dosing_verbind_als_klaar
-    on_turn_off:
-      - script.execute: dosing_verbind_als_klaar
-
-  - platform: template
-    name: "Dosing schema pomp 2"
-    id: sw_dosing_schema_p2
-    icon: mdi:calendar-clock
-    restore_mode: RESTORE_DEFAULT_OFF
-    optimistic: true
-    on_turn_on:
-      - script.execute: dosing_verbind_als_klaar
-    on_turn_off:
-      - script.execute: dosing_verbind_als_klaar
-
-  - platform: template
-    name: "Dosing schema pomp 3"
-    id: sw_dosing_schema_p3
-    icon: mdi:calendar-clock
-    restore_mode: RESTORE_DEFAULT_OFF
-    optimistic: true
-    on_turn_on:
-      - script.execute: dosing_verbind_als_klaar
-    on_turn_off:
-      - script.execute: dosing_verbind_als_klaar
-
-  - platform: template
-    name: "Dosing schema pomp 4"
-    id: sw_dosing_schema_p4
-    icon: mdi:calendar-clock
-    restore_mode: RESTORE_DEFAULT_OFF
-    optimistic: true
-    on_turn_on:
-      - script.execute: dosing_verbind_als_klaar
-    on_turn_off:
-      - script.execute: dosing_verbind_als_klaar
-
 button:
   - platform: template
-    name: "Dosing pomp 1"
-    id: btn_dosing_p1
-    icon: mdi:eyedropper
+    name: "Dosing RTC sync"
+    id: btn_dosing_rtc_sync
+    icon: mdi:clock-sync
     on_press:
-      - lambda: id(dosing_device).set_manual_dose(0, (uint8_t)(id(num_dosing_vol_p1).state * 10.0f + 0.5f));
-      - script.execute: dosing_verbind_als_klaar
-
-  - platform: template
-    name: "Dosing pomp 2"
-    id: btn_dosing_p2
-    icon: mdi:eyedropper
-    on_press:
-      - lambda: id(dosing_device).set_manual_dose(1, (uint8_t)(id(num_dosing_vol_p2).state * 10.0f + 0.5f));
-      - script.execute: dosing_verbind_als_klaar
-
-  - platform: template
-    name: "Dosing pomp 3"
-    id: btn_dosing_p3
-    icon: mdi:eyedropper
-    on_press:
-      - lambda: id(dosing_device).set_manual_dose(2, (uint8_t)(id(num_dosing_vol_p3).state * 10.0f + 0.5f));
-      - script.execute: dosing_verbind_als_klaar
-
-  - platform: template
-    name: "Dosing pomp 4"
-    id: btn_dosing_p4
-    icon: mdi:eyedropper
-    on_press:
-      - lambda: id(dosing_device).set_manual_dose(3, (uint8_t)(id(num_dosing_vol_p4).state * 10.0f + 0.5f));
-      - script.execute: dosing_verbind_als_klaar
-
-number:
-  # Volume per pomp (handmatig dosis + schema)
-  - platform: template
-    name: "Dosing pomp 1 volume"
-    id: num_dosing_vol_p1
-    min_value: 0.5
-    max_value: 25.5
-    step: 0.5
-    initial_value: 1.0
-    restore_value: true
-    unit_of_measurement: "mL"
-    optimistic: true
-    icon: mdi:water
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing pomp 2 volume"
-    id: num_dosing_vol_p2
-    min_value: 0.5
-    max_value: 25.5
-    step: 0.5
-    initial_value: 10.0
-    restore_value: true
-    unit_of_measurement: "mL"
-    optimistic: true
-    icon: mdi:water
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing pomp 3 volume"
-    id: num_dosing_vol_p3
-    min_value: 0.5
-    max_value: 25.5
-    step: 0.5
-    initial_value: 1.0
-    restore_value: true
-    unit_of_measurement: "mL"
-    optimistic: true
-    icon: mdi:water
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing pomp 4 volume"
-    id: num_dosing_vol_p4
-    min_value: 0.5
-    max_value: 25.5
-    step: 0.5
-    initial_value: 1.0
-    restore_value: true
-    unit_of_measurement: "mL"
-    optimistic: true
-    icon: mdi:water
-    on_value:
-      - script.execute: dosing_debounce
-
-  # Tijdstip schema per pomp
-  - platform: template
-    name: "Dosing schema pomp 1 uur"
-    id: num_dosing_hour_p1
-    min_value: 0
-    max_value: 23
-    step: 1
-    initial_value: 9
-    restore_value: true
-    unit_of_measurement: "u"
-    optimistic: true
-    icon: mdi:clock-outline
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 2 uur"
-    id: num_dosing_hour_p2
-    min_value: 0
-    max_value: 23
-    step: 1
-    initial_value: 17
-    restore_value: true
-    unit_of_measurement: "u"
-    optimistic: true
-    icon: mdi:clock-outline
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 3 uur"
-    id: num_dosing_hour_p3
-    min_value: 0
-    max_value: 23
-    step: 1
-    initial_value: 9
-    restore_value: true
-    unit_of_measurement: "u"
-    optimistic: true
-    icon: mdi:clock-outline
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 4 uur"
-    id: num_dosing_hour_p4
-    min_value: 0
-    max_value: 23
-    step: 1
-    initial_value: 9
-    restore_value: true
-    unit_of_measurement: "u"
-    optimistic: true
-    icon: mdi:clock-outline
-    on_value:
-      - script.execute: dosing_debounce
-
-  # Minuten schema per pomp
-  - platform: template
-    name: "Dosing schema pomp 1 min"
-    id: num_dosing_min_p1
-    min_value: 0
-    max_value: 59
-    step: 1
-    initial_value: 0
-    restore_value: true
-    unit_of_measurement: "min"
-    optimistic: true
-    icon: mdi:clock-outline
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 2 min"
-    id: num_dosing_min_p2
-    min_value: 0
-    max_value: 59
-    step: 1
-    initial_value: 0
-    restore_value: true
-    unit_of_measurement: "min"
-    optimistic: true
-    icon: mdi:clock-outline
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 3 min"
-    id: num_dosing_min_p3
-    min_value: 0
-    max_value: 59
-    step: 1
-    initial_value: 0
-    restore_value: true
-    unit_of_measurement: "min"
-    optimistic: true
-    icon: mdi:clock-outline
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 4 min"
-    id: num_dosing_min_p4
-    min_value: 0
-    max_value: 59
-    step: 1
-    initial_value: 0
-    restore_value: true
-    unit_of_measurement: "min"
-    optimistic: true
-    icon: mdi:clock-outline
-    on_value:
-      - script.execute: dosing_debounce
-
-  # Weekdays bitmask per pomp (Ma=64 Di=32 Wo=16 Do=8 Vr=4 Za=2 Zo=1)
-  - platform: template
-    name: "Dosing schema pomp 1 weekdays"
-    id: num_dosing_weekdays_p1
-    min_value: 0
-    max_value: 127
-    step: 1
-    initial_value: 127
-    restore_value: true
-    optimistic: true
-    icon: mdi:calendar-week
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 2 weekdays"
-    id: num_dosing_weekdays_p2
-    min_value: 0
-    max_value: 127
-    step: 1
-    initial_value: 88
-    restore_value: true
-    optimistic: true
-    icon: mdi:calendar-week
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 3 weekdays"
-    id: num_dosing_weekdays_p3
-    min_value: 0
-    max_value: 127
-    step: 1
-    initial_value: 127
-    restore_value: true
-    optimistic: true
-    icon: mdi:calendar-week
-    on_value:
-      - script.execute: dosing_debounce
-
-  - platform: template
-    name: "Dosing schema pomp 4 weekdays"
-    id: num_dosing_weekdays_p4
-    min_value: 0
-    max_value: 127
-    step: 1
-    initial_value: 127
-    restore_value: true
-    optimistic: true
-    icon: mdi:calendar-week
-    on_value:
-      - script.execute: dosing_debounce
+      # Vlag alleen zetten als er echt verbonden wordt (zie CO2 RTC sync)
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - lambda: id(dosing_device).set_rtc_only();
+            - script.execute: dosing_verbind_als_klaar
 
 sensor:
   - platform: ble_client
@@ -393,4 +153,15 @@ sensor:
     unit_of_measurement: ""
     lambda: |-
       ESP_LOGI("dosing", "Notificatie (%d bytes): %s", (int)x.size(), chihiros::hex_dump(x).c_str());
+      return NAN;
+
+  - platform: template
+    id: dosing_laatste_sync
+    name: "Dosing laatste sync"
+    device_class: timestamp
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 300s
+    lambda: |-
+      if (id(dosing_laatste_sync_ts) > 0) return id(dosing_laatste_sync_ts);
       return NAN;

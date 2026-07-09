@@ -1,0 +1,165 @@
+substitutions:
+  device_name: higrow3
+  device_name_upper: Higrow 3
+  awake_duration: 10s
+  update_interval: 5s
+  ip_address: 192.168.20.13
+  
+esphome:
+  name: '${device_name}'
+  platform: ESP32
+  board: esp32dev
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  manual_ip:
+    static_ip: ${ip_address}
+    gateway: 192.168.20.1
+    subnet: 255.255.252.0
+    dns1: 192.168.1.2
+  fast_connect: enable
+  
+logger:
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  discovery: true
+  topic_prefix: higrow/${device_name}
+  on_message:
+    - topic: 'higrow/${device_name}/prevent_deep_sleep'
+      payload: 'ON'
+      then:
+        - deep_sleep.prevent: deep_sleep_control
+    - topic: 'higrow/${device_name}/prevent_deep_sleep'
+      payload: 'OFF'
+      then:
+        - delay: ${awake_duration}
+        - deep_sleep.enter:
+            id: deep_sleep_control
+            sleep_duration: !lambda "return id(sleep_duration).state * 60 * 1000;"  # converteren naar miliseconden
+  birth_message:
+  will_message:
+
+ota:
+  password: !secret ota_password
+ 
+i2c:
+  - id: bus_a
+    sda: 25
+    scl: 26
+    scan: true
+    setup_priority: -200
+
+switch:
+  - platform: gpio
+    pin: GPIO4
+    name: "${device_name_upper} Power Sensors"
+    id: spower
+    restore_mode: ALWAYS_ON
+    internal: true
+    setup_priority: 1000
+
+sensor:
+  - platform: dht
+    pin: 16
+    model: dht11
+    temperature:
+      name: "${device_name_upper} Temperature"
+      unit_of_measurement: "°C"
+      icon: "mdi:thermometer"
+      device_class: "temperature"
+      state_class: "measurement"
+      accuracy_decimals: 1            
+    humidity:
+      name: "${device_name_upper} Humidity"
+      unit_of_measurement: "%"
+      icon: "mdi:thermometer"
+      device_class: "humidity"
+      state_class: "measurement"      
+    update_interval: ${update_interval}
+    setup_priority: -100
+
+  - platform: adc
+    pin: 32
+    attenuation: 11db
+    name: "${device_name_upper} Soil Moisture"
+    icon: "mdi:water-percent"
+    state_class: "measurement"
+    device_class: "moisture"
+    accuracy_decimals: 1
+    unit_of_measurement: '%'
+    filters:
+    - median:
+        window_size: 7
+        send_every: 7
+        send_first_at: 7
+    - lambda: |-
+        return (2.75 - x) * 100.0 / (2.75 - 1.295);
+    update_interval: 1s
+    
+  - platform: bh1750
+    i2c_id: bus_a
+    name: "${device_name_upper} Lux"
+    address: 0x23
+    unit_of_measurement: "lx"
+    icon: "mdi:white-balance-sunny"
+    device_class: "illuminance"
+    state_class: "measurement"
+    setup_priority: -300
+    update_interval: ${update_interval}
+  
+  - platform: adc
+    pin: GPIO34
+    name: "${device_name_upper} Salt"
+    unit_of_measurement: '%'
+    device_class: "moisture"
+    accuracy_decimals: 4
+    filters:
+      # Map 0.0 (from sensor) to 0.0 (true value)
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 1.1 -> 100.0  
+    update_interval: ${update_interval}
+
+  - platform: adc
+    pin: 33
+    name: "${device_name_upper} Battery"
+    attenuation: 11db
+    unit_of_measurement: "V"
+    icon: "mdi:battery-high"
+    device_class: "voltage"
+    state_class: "measurement"
+    accuracy_decimals: 3
+    filters:
+      # Map 0.0 (from sensor) to 0.0 (true value)
+      - calibrate_linear:
+        - 0.0 -> 0.0
+        - 2.06 -> 4.16
+#      - lambda: return x * 2.0;
+    id: ${device_name}_voltage
+    update_interval: 2s
+
+  - platform: template
+    name: "${device_name_upper} Battery Pct"
+    unit_of_measurement: '%'
+    state_class: "measurement"
+    icon: "mdi:battery-high"
+    device_class: "battery"
+    lambda: |-
+          return ((id(${device_name}_voltage).state - 2.82) / 1.34 * 100.00);  
+    # 2.82v = minimum
+    # 4.16v = maximum       
+    # (current - minimum) * 100 / difference between max & mix 
+    update_interval: 5s
+
+  - platform: mqtt_subscribe
+    name: "Sleep duration"
+    id: sleep_duration
+    topic: higrow/sleep_duration
+    internal: true
+
+deep_sleep:
+  id: deep_sleep_control

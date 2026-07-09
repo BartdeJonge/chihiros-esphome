@@ -1,0 +1,260 @@
+# --- KOELVENTILATOR ---
+#
+# De Chihiros koelventilator koelt het aquariumwater door verdamping.
+# Hij meet zelf de water- en kamertemperatuur en regelt de snelheid automatisch.
+#
+# Verbindingsvolgorde bij elke BLE-connect:
+#   1. Auth            — standaard Chihiros handshake
+#   2. RTC × 2         — klok tweemaal synchroniseren (app-gedrag)
+#   3. Extra auth [06] — ventilator-specifieke extra authenticatie
+#   4. Extra auth [08] — tweede ventilator-specifieke auth
+#   5. Mode init       — stuurt de opgeslagen silent-mode stand
+#   6. Drempel         — watertemperatuur start/max
+#   7. Snelheid        — handmatige snelheid (0 = auto)
+#   8. Wachten         — 2s wachten op notificaties van apparaat
+#   9. Disconnect
+#
+# Notificaties van het apparaat (byte-posities in het ontvangen frame):
+#   byte[5]       = ventilatorsnelheid (%)
+#   byte[6:7]/256 = kamertemperatuur (°C)
+#   byte[11]/10   = watertemperatuur (°C)
+#   byte[12]      = luchtvochtigheid (%)
+#
+# VERBINDING: periodiek (elke 5 min) — verbindt voor temp-lezing, verbreekt daarna.
+# Ventilator regelt zichzelf o.b.v. temperatuurdrempels; BLE alleen voor monitoring en config.
+
+globals:
+  - id: cmd_seq_ventilator
+    type: uint8_t
+    restore_value: false
+    initial_value: '1'
+
+  - id: ventilator_silent_mode
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+
+ble_client:
+  - mac_address: ${ventilator_mac}
+    id: chihiros_ventilator
+    on_connect:
+      then:
+        - delay: 500ms
+        - logger.log: "ventilator: Auth"
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth(id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - logger.log:
+            format: "ventilator: RTC %04d-%02d-%02d %02d:%02d:%02d"
+            args: ["id(ntp_tijd).now().year", "id(ntp_tijd).now().month", "id(ntp_tijd).now().day_of_month", "id(ntp_tijd).now().hour", "id(ntp_tijd).now().minute", "id(ntp_tijd).now().second"]
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::rtc_pakket(id(ntp_tijd).now(), id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - logger.log: "ventilator: extra auth [06]"
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth_ext1(id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - logger.log: "ventilator: extra auth [08]"
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::auth_ext2(id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - logger.log: "ventilator: mode init"
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda |-
+              return chihiros::set_mode(id(ventilator_silent_mode) ? chihiros::data::SILENT_ON : chihiros::data::SILENT_OFF, id(cmd_seq_ventilator)++);
+        - delay: 200ms
+        - script.execute: stuur_ventilator_drempel
+        - script.wait: stuur_ventilator_drempel
+        - logger.log:
+            format: "ventilator: snelheid=%d"
+            args: ["(int)id(num_ventilator_snelheid).state"]
+        - ble_client.ble_write:
+            id: chihiros_ventilator
+            service_uuid: ${ble_service}
+            characteristic_uuid: ${ble_tx}
+            value: !lambda return chihiros::fan_speed((uint8_t)id(num_ventilator_snelheid).state, id(cmd_seq_ventilator)++);
+        - delay: 2000ms
+        - switch.turn_off: ventilator_verbinding
+        - logger.log: "ventilator: init klaar, verbinding verbroken"
+    on_disconnect:
+      then:
+        - logger.log: "ventilator: verbinding verbroken"
+
+interval:
+  - interval: 5min
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden) && strcmp("${ventilator_mac}", "00:00:00:00:00:00") != 0;
+          then:
+            - switch.turn_on: ventilator_verbinding
+
+script:
+  - id: ventilator_verbind_als_klaar
+    then:
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - switch.turn_on: ventilator_verbinding
+
+  - id: stuur_ventilator_drempel
+    then:
+      - logger.log:
+          format: "ventilator: drempel start=%d max=%d"
+          args: ["(int)id(num_ventilator_start_temp).state", "(int)id(num_ventilator_max_temp).state"]
+      - ble_client.ble_write:
+          id: chihiros_ventilator
+          service_uuid: ${ble_service}
+          characteristic_uuid: ${ble_tx}
+          value: !lambda return chihiros::fan_temp_thresh((uint8_t)id(num_ventilator_start_temp).state, (uint8_t)id(num_ventilator_max_temp).state, id(cmd_seq_ventilator)++);
+
+switch:
+  - platform: ble_client
+    ble_client_id: chihiros_ventilator
+    id: ventilator_verbinding
+    internal: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    name: "Ventilator silent mode"
+    id: sw_ventilator_silent
+    icon: mdi:volume-off
+    lambda: return id(ventilator_silent_mode);
+    turn_on_action:
+      - globals.set:
+          id: ventilator_silent_mode
+          value: 'true'
+      - script.execute: ventilator_verbind_als_klaar
+    turn_off_action:
+      - globals.set:
+          id: ventilator_silent_mode
+          value: 'false'
+      - script.execute: ventilator_verbind_als_klaar
+
+button:
+  - platform: template
+    name: "Ventilator RTC sync"
+    id: btn_ventilator_rtc_sync
+    icon: mdi:clock-sync
+    on_press:
+      - script.execute: ventilator_verbind_als_klaar
+
+number:
+  - platform: template
+    name: "Ventilator starttemperatuur"
+    id: num_ventilator_start_temp
+    min_value: 18
+    max_value: 32
+    step: 1
+    initial_value: 24
+    restore_value: true
+    icon: mdi:thermometer-water
+    unit_of_measurement: "°C"
+    optimistic: true
+    on_value:
+      - script.execute: ventilator_verbind_als_klaar
+
+  - platform: template
+    name: "Ventilator maximale koeling"
+    id: num_ventilator_max_temp
+    min_value: 20
+    max_value: 35
+    step: 1
+    initial_value: 28
+    restore_value: true
+    icon: mdi:thermometer-high
+    unit_of_measurement: "°C"
+    optimistic: true
+    on_value:
+      - script.execute: ventilator_verbind_als_klaar
+
+  - platform: template
+    name: "Ventilator handmatige snelheid"
+    id: num_ventilator_snelheid
+    min_value: 0
+    max_value: 20
+    step: 1
+    initial_value: 0
+    restore_value: false
+    icon: mdi:fan
+    unit_of_measurement: ""
+    optimistic: true
+    on_value:
+      - script.execute: ventilator_verbind_als_klaar
+
+sensor:
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: chihiros_ventilator
+    service_uuid: ${ble_service}
+    characteristic_uuid: ${ble_rx}
+    id: ventilator_notificatie
+    name: "Ventilator Notificatie"
+    notify: true
+    internal: true
+    unit_of_measurement: ""
+    lambda: |-
+      auto d = chihiros::parse_ventilator_notificatie(x);
+      if (d.valid) {
+        id(sensor_ventilator_fan_speed).publish_state(d.fan_speed);
+        if (d.kamer_temp > 0.0f && d.kamer_temp < 50.0f) id(sensor_ventilator_kamer_temp).publish_state(d.kamer_temp);
+        if (d.water_temp > 0.0f && d.water_temp < 50.0f) id(sensor_ventilator_water_temp).publish_state(d.water_temp);
+        id(sensor_ventilator_humidity).publish_state(d.humidity);
+      }
+      return NAN;
+
+  - platform: template
+    id: sensor_ventilator_water_temp
+    name: "Aquarium watertemperatuur"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 2
+    icon: mdi:thermometer-water
+
+  - platform: template
+    id: sensor_ventilator_kamer_temp
+    name: "Aquarium kamertemperatuur"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    icon: mdi:thermometer
+
+  - platform: template
+    id: sensor_ventilator_humidity
+    name: "Aquarium luchtvochtigheid"
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 0
+
+  - platform: template
+    id: sensor_ventilator_fan_speed
+    name: "Ventilator snelheid"
+    unit_of_measurement: "%"
+    state_class: measurement
+    accuracy_decimals: 0
+    icon: mdi:fan

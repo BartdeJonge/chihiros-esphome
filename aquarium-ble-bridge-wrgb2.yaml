@@ -29,6 +29,12 @@ globals:
     type: chihiros::WRGB2Device
     restore_value: false
 
+  # Epoch van de laatst afgeronde config-drain (zie CO2 voor toelichting)
+  - id: wrgb2_laatste_sync_ts
+    type: float
+    restore_value: true
+    initial_value: '0'
+
 ble_client:
   - mac_address: ${wrgb2_mac}
     id: chihiros_wrgb2
@@ -55,6 +61,11 @@ ble_client:
                   characteristic_uuid: ${ble_tx}
                   value: !lambda return id(wrgb2_device).next();
               - delay: 200ms
+        - lambda: |-
+            if (id(ntp_tijd).now().is_valid()) {
+              id(wrgb2_laatste_sync_ts) = id(ntp_tijd).now().timestamp;
+              id(wrgb2_laatste_sync).publish_state(id(wrgb2_laatste_sync_ts));
+            }
         - switch.turn_off: wrgb2_verbinding
         - logger.log: "wrgb2: klaar"
     on_disconnect:
@@ -214,8 +225,13 @@ button:
     id: btn_wrgb2_rtc_sync
     icon: mdi:clock-sync
     on_press:
-      - lambda: id(wrgb2_device).set_rtc_only();
-      - script.execute: wrgb2_verbind_als_klaar
+      # Vlag alleen zetten als er echt verbonden wordt (zie CO2 RTC sync)
+      - if:
+          condition:
+            lambda: return id(ha_verbonden);
+          then:
+            - lambda: id(wrgb2_device).set_rtc_only();
+            - script.execute: wrgb2_verbind_als_klaar
 
 sensor:
   - platform: ble_client
@@ -230,4 +246,15 @@ sensor:
     unit_of_measurement: ""
     lambda: |-
       ESP_LOGI("wrgb2", "Notificatie (%d bytes): %s", (int)x.size(), chihiros::hex_dump(x).c_str());
+      return NAN;
+
+  - platform: template
+    id: wrgb2_laatste_sync
+    name: "WRGB2 laatste sync"
+    device_class: timestamp
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 300s
+    lambda: |-
+      if (id(wrgb2_laatste_sync_ts) > 0) return id(wrgb2_laatste_sync_ts);
       return NAN;

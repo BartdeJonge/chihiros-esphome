@@ -1,0 +1,60 @@
+esphome:
+  name: meterkast-dsmr
+
+esp8266:
+  board: d1_mini
+  
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: NONE
+  post_connect_roaming: false
+  reboot_timeout: 0s
+
+logger:
+  baud_rate: 0
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+  
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+    
+uart:
+  rx_pin: GPIO3
+  baud_rate: 115200
+  rx_buffer_size: 1700
+    
+dsmr:
+  max_telegram_length: 1700
+
+sensor:
+  - platform: dsmr
+    energy_delivered_tariff1:
+      name: energy_consumption_tarif_1
+    energy_delivered_tariff2:
+      name: energy_consumption_tarif_2
+    energy_returned_tariff1:
+      name: energy_production_tarif_1
+    energy_returned_tariff2:
+      name: energy_production_tarif_2
+    power_delivered:
+      name: power_consumption
+    power_returned:
+      name: power_production
+    voltage_l1:
+      name: voltage_l1
+    voltage_l2:
+      name: voltage_l2
+    voltage_l3:
+      name: voltage_l3

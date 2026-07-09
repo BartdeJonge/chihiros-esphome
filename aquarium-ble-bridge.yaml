@@ -50,12 +50,11 @@ wifi:
   post_connect_roaming: false
   reboot_timeout: 0s
 
+# Per-tag DEBUG boven het globale level kan niet (DEBUG-statements zijn bij INFO
+# al weggecompileerd); zet tijdelijk level: DEBUG als BLE-diagnose nodig is.
 logger:
-  level: DEBUG
+  level: INFO
   hardware_uart: USB_SERIAL_JTAG
-  logs:
-    esp32_ble_tracker: DEBUG
-    ble_client: DEBUG
 
 globals:
   - id: ha_verbonden
@@ -110,6 +109,27 @@ esp32_ble_tracker:
             else if (name.rfind("DYDOSE", 0) == 0) type = "Dosing pump         -> set as dosing_mac";
             ESP_LOGI("ble_scan", "Chihiros found: %s | MAC=%s RSSI=%d",
               type, mac.c_str(), x.get_rssi());
+
+# Watchdog: een *_verbinding-switch die > 5 min aan staat wijst op een device
+# dat onbereikbaar is — de ble_client blijft dan eindeloos connecten en bezet
+# één van de 8 BLE-slots. Forceer uit; een volgende trigger probeert gewoon opnieuw.
+interval:
+  - interval: 1min
+    then:
+      - lambda: |-
+          static uint8_t tellers[6] = {0, 0, 0, 0, 0, 0};
+          esphome::switch_::Switch *verbindingen[6] = {
+            id(co2_verbinding),    id(roerder_verbinding), id(ventilator_verbinding),
+            id(doctor_verbinding), id(wrgb2_verbinding),   id(dosing_verbinding)};
+          const char *namen[6] = {"co2", "roerder", "ventilator", "doctor", "wrgb2", "dosing"};
+          for (int i = 0; i < 6; i++) {
+            if (!verbindingen[i]->state) { tellers[i] = 0; continue; }
+            if (++tellers[i] >= 5) {
+              ESP_LOGW("watchdog", "%s: verbinding > 5 min actief — geforceerd uit", namen[i]);
+              verbindingen[i]->turn_off();
+              tellers[i] = 0;
+            }
+          }
 
 packages:
   schema:     !include aquarium-ble-bridge-schema.yaml

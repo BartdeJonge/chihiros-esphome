@@ -1,0 +1,171 @@
+esphome:
+  name: schuur-aanwezigheid
+  friendly_name: Schuur aanwezigheid
+  on_boot:
+    priority: -200
+    then:
+      - delay: 3s
+      - number.set:
+          id: max_move_gate
+          value: 8
+      - number.set:
+          id: max_still_gate
+          value: 8
+
+esp32:
+  board: lolin_c3_mini
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: LIGHT
+  post_connect_roaming: false
+  reboot_timeout: 0s
+
+web_server:
+  port: 80
+  auth:
+    username: !secret web_user
+    password: !secret web_password
+
+uart:
+  id: uart_ld2410
+  tx_pin: GPIO4
+  rx_pin: GPIO3
+  baud_rate: 256000
+  parity: NONE
+  stop_bits: 1
+
+ld2410:
+  id: ld2410_radar
+
+binary_sensor:
+  - platform: status
+    name: Online
+  - platform: ld2410
+    has_target:
+      name: Aanwezig
+    has_moving_target:
+      name: Beweegt
+    has_still_target:
+      name: Stil aanwezig
+
+sensor:
+  - platform: template
+    name: ESP Temperatuur
+    lambda: return temperatureRead();
+    unit_of_measurement: °C
+    device_class: TEMPERATURE
+    update_interval: 30s
+    entity_category: diagnostic
+  - platform: ld2410
+    moving_distance:
+      name: Bewegingsafstand
+    still_distance:
+      name: Stilstandsafstand
+    moving_energy:
+      name: Bewegingsenergie
+      device_class: ""
+    still_energy:
+      name: Stilstandsenergie
+      device_class: ""
+    detection_distance:
+      name: Detectieafstand
+
+number:
+  - platform: ld2410
+    timeout:
+      name: Timeout
+    max_move_distance_gate:
+      id: max_move_gate
+      name: Max bewegingsafstand
+    max_still_distance_gate:
+      id: max_still_gate
+      name: Max stilstandsafstand
+    g0:
+      move_threshold:
+        name: Gate 0 bewegingsdrempel
+      still_threshold:
+        name: Gate 0 stilstandsdrempel
+    g1:
+      move_threshold:
+        name: Gate 1 bewegingsdrempel
+      still_threshold:
+        name: Gate 1 stilstandsdrempel
+    g2:
+      move_threshold:
+        name: Gate 2 bewegingsdrempel
+      still_threshold:
+        name: Gate 2 stilstandsdrempel
+    g3:
+      move_threshold:
+        name: Gate 3 bewegingsdrempel
+      still_threshold:
+        name: Gate 3 stilstandsdrempel
+    g4:
+      move_threshold:
+        name: Gate 4 bewegingsdrempel
+      still_threshold:
+        name: Gate 4 stilstandsdrempel
+    g5:
+      move_threshold:
+        name: Gate 5 bewegingsdrempel
+      still_threshold:
+        name: Gate 5 stilstandsdrempel
+    g6:
+      move_threshold:
+        name: Gate 6 bewegingsdrempel
+      still_threshold:
+        name: Gate 6 stilstandsdrempel
+    g7:
+      move_threshold:
+        name: Gate 7 bewegingsdrempel
+      still_threshold:
+        name: Gate 7 stilstandsdrempel
+    g8:
+      move_threshold:
+        name: Gate 8 bewegingsdrempel
+      still_threshold:
+        name: Gate 8 stilstandsdrempel
+
+select:
+  - platform: ld2410
+    distance_resolution:
+      name: Afstandsresolutie
+
+light:
+  - platform: status_led
+    name: Status LED
+    pin:
+      number: GPIO8
+      inverted: true
+    internal: true
+    restore_mode: ALWAYS_OFF
+
+switch:
+  - platform: ld2410
+    bluetooth:
+      name: "LD2410 Bluetooth"
+      restore_mode: ALWAYS_OFF
+      internal: true
+
+button:
+  - platform: restart
+    icon: mdi:power-cycle
+    name: ESP herstarten
+  - platform: factory_reset
+    disabled_by_default: true
+    name: Fabrieksinstellingen

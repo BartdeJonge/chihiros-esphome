@@ -19,7 +19,9 @@
 namespace chihiros {
 
 class CommandQueue {
-    // Sequence counter: starts at 1, never resets mid-session.
+    // Sequence counter: starts at 1, reset door clear() bij elke prepare() —
+    // elke connect is een verse sessie (conform app-gedrag in de btsnoop-captures;
+    // elimineert ook het wrap-randgeval 255→0 dat de app nooit bereikt).
     // Skips 0x5a (frame header byte) — required for WRGB2, harmless for others.
     uint8_t seq_ = 1;
     uint8_t adv_seq() {
@@ -52,7 +54,7 @@ public:
     std::vector<uint8_t> next() {
         auto cmd = queue_.front(); queue_.pop_front(); return cmd;
     }
-    void clear() { queue_.clear(); }
+    void clear() { queue_.clear(); seq_ = 1; }
     void set_rtc_only() { rtc_only_ = true; }
 
     // Expose adv_seq for subclasses that need it in prepare()
@@ -90,27 +92,22 @@ public:
 class VentilatorDevice : public CommandQueue {
 public:
     void prepare(esphome::ESPTime time, bool silent_mode,
-                 uint8_t start_temp, uint8_t max_temp, uint8_t speed) {
+                 uint8_t start_temp, uint8_t max_temp, uint8_t speed,
+                 bool send_settings = true) {
         clear();
         push_auth_rtc_twice(time);
         push(auth_ext1(seq()));
         push(auth_ext2(seq()));
-        if (!silent_mode) {
-            // Silent: 6× alternerende mode-commando's, geen thresh/speed/final-auth
-            for (int i = 0; i < 3; i++) {
-                push(set_mode(data::SILENT_ON,  seq()));
-                push(set_mode(data::SILENT_OFF, seq()));
-            }
-        } else {
-            // Normaal: thresh + twee mode-commando's + speed + final auth
-            push(fan_temp_thresh(start_temp, max_temp, seq()));
-            push(set_mode(data::SILENT_OFF, seq()));
-            push(set_mode(data::SILENT_ON,  seq()));
-            if (speed > 0)
-                push(fan_speed(speed, seq()));
-            push(auth_ext1(seq()));
-            push(auth_ext2(seq()));
-        }
+        if (!send_settings) return;
+        // btsnoop 2026-05-29 (fan/fan_silent): thresh, mode en speed zijn losse,
+        // zelfstandige commando's — de eerdere alternerende reeksen waren replays
+        // van interactieve app-sessies. Afsluitende auth-pair conform app-capture.
+        push(fan_temp_thresh(start_temp, max_temp, seq()));
+        push(set_mode(silent_mode ? data::SILENT_ON : data::SILENT_OFF, seq()));
+        if (speed > 0)
+            push(fan_speed(speed, seq()));
+        push(auth_ext1(seq()));
+        push(auth_ext2(seq()));
     }
 };
 
@@ -124,8 +121,10 @@ public:
         if (time.is_valid())
             push(rtc_pakket(time, seq()));
         if (rtc_only_) { rtc_only_ = false; return; }
-        push(device_settings(0x00, (uint8_t)roundf(tds_ppm / 0.4f), seq()));
-        push(device_settings(0x00, (uint8_t)(volume_l * 2.0f),       seq()));
+        // 16-bit encoding: 130 ppm → EC 325 → [0x01, 0x45]. De oude uint8-cast
+        // wrapte dit naar 69 µS/cm.
+        push(device_settings((uint16_t)roundf(tds_ppm / 0.4f), seq()));
+        push(device_settings((uint16_t)(volume_l * 2.0f),      seq()));
     }
 };
 

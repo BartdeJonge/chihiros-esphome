@@ -1,0 +1,67 @@
+substitutions:
+  device_name: bbq-display-test
+
+esphome:
+  name: ${device_name}
+  friendly_name: BBQ Display Test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  fast_connect: enable
+  power_save_mode: NONE
+  post_connect_roaming: false
+  reboot_timeout: 0s
+  ap:
+    ssid: "BBQ-Test"
+    password: "bbqtest123"
+
+logger:
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+
+# LilyGO T5 v2.3.2 — model 2.13inV2 (GDEH0213B72, 250x122)
+display:
+  - platform: waveshare_epaper
+    cs_pin: GPIO5
+    dc_pin: GPIO17
+    busy_pin: GPIO4
+    reset_pin: GPIO16
+    # Probeer in volgorde als display leeg blijft:
+    #   2.13inV2  (GDEH0213B72 — meest voorkomend op V2.3.2)
+    #   2.13in    (GDEH0213B1  — oudere versie)
+    #   2.13inV3  (GDEM0213B74 — nieuwere batch)
+    model: 2.13inV2
+    full_update_every: 1
+    update_interval: 5s
+    lambda: |-
+      it.fill(COLOR_OFF);
+      it.print(10, 5,  id(f20), "BBQ Display");
+      it.print(10, 32, id(f13), "Test OK!");
+      it.print(10, 52, id(f13), "250 x 122 pixels");
+      it.rectangle(5, 2, 240, 118);
+      // Testbalk
+      it.filled_rectangle(10, 80, 230, 10);
+      it.filled_rectangle(10, 95, 115, 10);
+      it.filled_rectangle(10, 110, 50, 8);
+
+font:
+  - file: "gfonts://Roboto"
+    id: f20
+    size: 20
+    glyphs: "0123456789°. -/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!"
+  - file: "gfonts://Roboto"
+    id: f13
+    size: 13
+    glyphs: "0123456789°. -/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!()"

@@ -8,8 +8,8 @@
 #   2. RTC × 2         — klok tweemaal synchroniseren (app-gedrag)
 #   3. Extra auth [06] — ventilator-specifieke extra authenticatie
 #   4. Extra auth [08] — tweede ventilator-specifieke auth
-#   5. Mode init       — stuurt de opgeslagen silent-mode stand
-#   6. Drempel         — watertemperatuur start/max
+#   5. Drempel         — watertemperatuur start/max
+#   6. Mode            — de opgeslagen silent-mode stand (1× SILENT_ON of SILENT_OFF)
 #   7. Snelheid        — 0 = device auto-modus (eigen thermostaat), >0 = handmatige override
 #   8. Wachten         — 2s wachten op notificaties van apparaat
 #   9. Disconnect
@@ -29,9 +29,21 @@ globals:
     restore_value: true
     initial_value: 'false'
 
+  - id: ventilator_update_pending
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
   - id: ventilator_device
     type: chihiros::VentilatorDevice
     restore_value: false
+
+  # Epoch van de laatst afgeronde drain (zie CO2 voor toelichting) — de
+  # 5-min monitoring-connects tellen ook mee, dus dit hoort vers te blijven
+  - id: ventilator_laatste_sync_ts
+    type: float
+    restore_value: true
+    initial_value: '0'
 
 ble_client:
   - mac_address: ${ventilator_mac}
@@ -44,8 +56,10 @@ ble_client:
               id(ntp_tijd).now(), id(ventilator_silent_mode),
               (uint8_t)id(num_ventilator_start_temp).state,
               (uint8_t)id(num_ventilator_max_temp).state,
-              (uint8_t)id(num_ventilator_snelheid).state
+              (uint8_t)id(num_ventilator_snelheid).state,
+              id(ventilator_update_pending)
             );
+            id(ventilator_update_pending) = false;
         - while:
             condition:
               lambda: return id(ventilator_device).has_next();
@@ -57,6 +71,11 @@ ble_client:
                   value: !lambda return id(ventilator_device).next();
               - delay: 200ms
         - delay: 2000ms
+        - lambda: |-
+            if (id(ntp_tijd).now().is_valid()) {
+              id(ventilator_laatste_sync_ts) = id(ntp_tijd).now().timestamp;
+              id(ventilator_laatste_sync).publish_state(id(ventilator_laatste_sync_ts));
+            }
         - switch.turn_off: ventilator_verbinding
         - logger.log: "ventilator: klaar"
     on_disconnect:
@@ -85,6 +104,9 @@ script:
     mode: restart
     then:
       - delay: 1500ms
+      - globals.set:
+          id: ventilator_update_pending
+          value: 'true'
       - script.execute: ventilator_verbind_als_klaar
 
 
@@ -99,16 +121,23 @@ switch:
     name: "Ventilator silent mode"
     id: sw_ventilator_silent
     icon: mdi:volume-off
+    restore_mode: DISABLED  # global is bron van waarheid
     lambda: return id(ventilator_silent_mode);
     turn_on_action:
       - globals.set:
           id: ventilator_silent_mode
+          value: 'true'
+      - globals.set:
+          id: ventilator_update_pending
           value: 'true'
       - script.execute: ventilator_verbind_als_klaar
     turn_off_action:
       - globals.set:
           id: ventilator_silent_mode
           value: 'false'
+      - globals.set:
+          id: ventilator_update_pending
+          value: 'true'
       - script.execute: ventilator_verbind_als_klaar
 
 button:
@@ -216,3 +245,14 @@ sensor:
     state_class: measurement
     accuracy_decimals: 0
     icon: mdi:fan
+
+  - platform: template
+    id: ventilator_laatste_sync
+    name: "Ventilator laatste sync"
+    device_class: timestamp
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 300s
+    lambda: |-
+      if (id(ventilator_laatste_sync_ts) > 0) return id(ventilator_laatste_sync_ts);
+      return NAN;
