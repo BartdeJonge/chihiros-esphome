@@ -135,7 +135,8 @@ public:
     void prepare(esphome::ESPTime time, bool auto_modus,
                  uint8_t fp_start_h, uint8_t fp_start_m,
                  uint8_t fp_eind_h,  uint8_t fp_eind_m,
-                 uint8_t ramp_min, uint8_t r, uint8_t g, uint8_t b) {
+                 uint8_t ramp_min, uint8_t r, uint8_t g, uint8_t b,
+                 uint8_t w = data::SKIP) {
         clear();
         push(auth(seq()));
         if (time.is_valid()) {
@@ -146,7 +147,7 @@ public:
         if (auto_modus) {
             push(reset_schema(seq()));
             push(wrgb_schedule(fp_start_h, fp_start_m, fp_eind_h, fp_eind_m,
-                               wrgb2_ramp_veilig(ramp_min), 0x7f, r, g, b, seq()));
+                               wrgb2_ramp_veilig(ramp_min), 0x7f, r, g, b, w, seq()));
             push(reset_auto(seq()));
             if (time.is_valid())
                 push(rtc_pakket(time, seq()));  // triggers lamp schedule evaluation
@@ -154,6 +155,9 @@ public:
             push(wrgb_channel(data::WRGB_R, r, seq()));
             push(wrgb_channel(data::WRGB_G, g, seq()));
             push(wrgb_channel(data::WRGB_B, b, seq()));
+            // Alleen sturen als de lamp een wit-kanaal heeft (Pro).
+            if (w != data::SKIP)
+                push(wrgb_channel(data::WRGB_W, w, seq()));
         }
     }
 };

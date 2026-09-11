@@ -9,9 +9,15 @@
 # Manueel → auto:   MODE(RESET_AUTO) → MODE(0x05) → SCHEDULE
 #
 # SCHEDULE: hdr::DEVICE(0xa5), cmd=0x19
-#   data: [aan_h, aan_m, uit_h, uit_m, ramp_min, weekdays=0x7f, R, G, B, 0xff×5]
+#   data: [aan_h, aan_m, uit_h, uit_m, ramp_min, weekdays=0x7f, R, G, B, W, 0xff×4]
 #   Delete = R/G/B = 0xff
-# BRIGHTNESS: hdr::BASE(0x5a), cmd=0x07, data=[kanaal, waarde]  (0=R, 1=G, 2=B)
+#   W = wit-kanaal op WRGB II Pro; 0xff (SKIP) op een gewone WRGB II
+# BRIGHTNESS: hdr::BASE(0x5a), cmd=0x07, data=[kanaal, waarde]  (0=R, 1=G, 2=B, 3=W)
+#
+# WRGB II PRO: "true WRGB" met vier onafhankelijke kanalen. Zet wrgb2_pro: "true"
+# in de substitutions; anders wordt het wit-kanaal nooit aangesproken en blijft
+# het gedrag identiek aan de gewone WRGB II. Naamprefix DYWPRO (30-90) of
+# DYWPR120 — kanaalvolgorde en frame-encoding zijn verder gelijk.
 #
 # VERBINDING: niet-persistent — connect → init (schema of brightness) → disconnect
 # Lamp onthoudt schema zelf via interne RTC; BLE alleen nodig bij schema-update.
@@ -29,6 +35,12 @@ globals:
     type: chihiros::WRGB2Device
     restore_value: false
 
+  # Uit substitutions; bepaalt of het wit-kanaal meegestuurd wordt.
+  - id: wrgb2_heeft_wit
+    type: bool
+    restore_value: false
+    initial_value: '${wrgb2_pro}'
+
 ble_client:
   - mac_address: ${wrgb2_mac}
     id: chihiros_wrgb2
@@ -43,7 +55,9 @@ ble_client:
               (uint8_t)id(wrgb2_ramp).state,
               (uint8_t)id(wrgb2_schema_rood).state,
               (uint8_t)id(wrgb2_schema_groen).state,
-              (uint8_t)id(wrgb2_schema_blauw).state
+              (uint8_t)id(wrgb2_schema_blauw).state,
+              id(wrgb2_heeft_wit) ? (uint8_t)id(wrgb2_schema_wit).state
+                                  : chihiros::data::SKIP
             );
         - while:
             condition:
@@ -153,6 +167,21 @@ number:
     on_value:
       - script.execute: wrgb2_debounce_manueel
 
+  # Alleen zinvol op een WRGB II Pro (wrgb2_pro: "true").
+  - platform: template
+    name: "WRGB2 wit"
+    id: num_wrgb2_w
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 0
+    restore_value: true
+    icon: mdi:led-on
+    unit_of_measurement: "%"
+    optimistic: true
+    on_value:
+      - script.execute: wrgb2_debounce_manueel
+
   - platform: template
     name: "WRGB2 schema ramp"
     id: wrgb2_ramp
@@ -196,6 +225,19 @@ number:
     max_value: 100
     step: 1
     initial_value: 80
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "%"
+    icon: mdi:led-on
+
+  # Alleen zinvol op een WRGB II Pro (wrgb2_pro: "true").
+  - platform: template
+    name: "WRGB2 schema wit"
+    id: wrgb2_schema_wit
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 100
     restore_value: true
     optimistic: true
     unit_of_measurement: "%"

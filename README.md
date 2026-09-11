@@ -160,6 +160,7 @@ This connect → configure → disconnect pattern is expected and correct. Avoid
 | Cooling Fan | Working ✅ |
 | Doctor Mate | Working ✅ |
 | WRGB II | Working ✅ |
+| WRGB II Pro (true WRGB, 4-channel) | Working ✅ — set `wrgb2_pro: "true"` |
 | Dosing Pump | Working ✅ |
 
 ---

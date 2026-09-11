@@ -53,6 +53,9 @@ namespace data {
   constexpr uint8_t WRGB_R      = 0x00;
   constexpr uint8_t WRGB_G      = 0x01;
   constexpr uint8_t WRGB_B      = 0x02;
+  // WRGB II Pro (DYWPRO*/DYWPR120) is "true WRGB": vierde, onafhankelijk
+  // wit-kanaal. De gewone WRGB II heeft dit niet.
+  constexpr uint8_t WRGB_W      = 0x03;
 }
 
 namespace detail {
@@ -202,10 +205,12 @@ inline std::vector<uint8_t> wrgb_schedule(uint8_t on_h, uint8_t on_m,
                                            uint8_t off_h, uint8_t off_m,
                                            uint8_t ramp_min, uint8_t weekdays,
                                            uint8_t r, uint8_t g, uint8_t b,
-                                           uint8_t seq) {
+                                           uint8_t w, uint8_t seq) {
+    // Byte 9 is het wit-kanaal op true-WRGB (Pro); geef data::SKIP door voor
+    // een gewone WRGB II zodat het frame byte-voor-byte gelijk blijft.
     return pakket(hdr::DEVICE, cmd::SCHEDULE,
-        {on_h, on_m, off_h, off_m, ramp_min, weekdays, r, g, b,
-         data::SKIP, data::SKIP, data::SKIP, data::SKIP, data::SKIP}, seq);
+        {on_h, on_m, off_h, off_m, ramp_min, weekdays, r, g, b, w,
+         data::SKIP, data::SKIP, data::SKIP, data::SKIP}, seq);
 }
 
 // ── Doctor Mate / Dosing ──────────────────────────────────────────────────────

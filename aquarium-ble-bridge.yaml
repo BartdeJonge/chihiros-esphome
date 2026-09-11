@@ -16,6 +16,10 @@ substitutions:
   ventilator_mac: "D7:65:2F:EF:CC:BB"
   doctor_mac: "CC:A0:E9:07:34:C6"
   wrgb2_mac:  "CF:20:3B:6D:17:C1"
+  # WRGB II Pro (DYWPRO30-90 / DYWPR120) heeft een vierde, onafhankelijk
+  # wit-kanaal. Zet op "true" voor een Pro; "false" laat de frames voor een
+  # gewone WRGB II byte-voor-byte ongewijzigd.
+  wrgb2_pro:  "false"
   dosing_mac: "F1:C0:D0:B8:E9:5A"
   # Nordic UART Service UUIDs (gedeeld door alle Chihiros devices)
   ble_service: "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -103,6 +107,7 @@ esp32_ble_tracker:
             // Identificeer apparaattype uit naam-prefix (DY{type}{MAC_zonder_dubbele_punten})
             const char* type = "Unknown type";
             if      (name.rfind("DYNT90", 0) == 0) type = "WRGB2 light         -> set as wrgb2_mac";
+            else if (name.rfind("DYWPR",  0) == 0) type = "WRGB2 Pro light     -> set as wrgb2_mac, wrgb2_pro: true";
             else if (name.rfind("DYPCO2", 0) == 0) type = "CO2 controller      -> set as co2_mac";
             else if (name.rfind("DYMIX",  0) == 0) type = "Magnetic stirrer    -> set as roerder_mac";
             else if (name.rfind("DYNFAN", 0) == 0) type = "Cooling fan         -> set as ventilator_mac";
