@@ -18,6 +18,17 @@
 #
 # BELANGRIJK: sequence byte mag nooit 90 (=0x5a = frame header) zijn → next_seq()
 # Ramp-waarde 90 min is ook verboden → wordt 89 min afgerond.
+#
+# OUDE WRGB II (naam "DYWRGB…"): zelfde frame-formaat, maar kan de HM-10 service
+# (FFE0/FFE1) gebruiken i.p.v. Nordic UART. Zet dan in de substitutions:
+#   wrgb2_service: "0000ffe0-0000-1000-8000-00805f9b34fb"
+#   wrgb2_tx/rx:   "0000ffe1-0000-1000-8000-00805f9b34fb"
+#
+# RTC-ONDERHOUD: de lamp verliest zijn klok bij stroomuitval. De bridge doet een
+# RTC-only sync (auth + RTC, schema blijft ongemoeid):
+#   - bij de eerste advertentie na boot van de ESP (zodra NTP geldig is)
+#   - wanneer de lamp >2 min niet gezien is en weer adverteert (stroom terug)
+#   - elke 6 uur
 
 globals:
   - id: wrgb2_auto_modus
@@ -28,6 +39,45 @@ globals:
   - id: wrgb2_device
     type: chihiros::WRGB2Device
     restore_value: false
+
+  - id: wrgb2_laatst_gezien
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
+  - id: wrgb2_rtc_nodig
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+esp32_ble_tracker:
+  on_ble_advertise:
+    - mac_address: ${wrgb2_mac}
+      then:
+        - lambda: |-
+            uint32_t nu = millis();
+            if (id(wrgb2_laatst_gezien) == 0 || nu - id(wrgb2_laatst_gezien) > 120000) {
+              ESP_LOGI("wrgb2", "lamp (opnieuw) gezien — RTC sync gepland");
+              id(wrgb2_rtc_nodig) = true;
+            }
+            id(wrgb2_laatst_gezien) = nu;
+
+interval:
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(wrgb2_rtc_nodig) && id(ntp_tijd).now().is_valid()
+                  && !id(wrgb2_verbinding).state;
+          then:
+            - lambda: |-
+                id(wrgb2_rtc_nodig) = false;
+                id(wrgb2_device).set_rtc_only();
+            - switch.turn_on: wrgb2_verbinding
+  - interval: 6h
+    then:
+      - lambda: id(wrgb2_rtc_nodig) = true;
 
 ble_client:
   - mac_address: ${wrgb2_mac}
@@ -51,8 +101,8 @@ ble_client:
             then:
               - ble_client.ble_write:
                   id: chihiros_wrgb2
-                  service_uuid: ${ble_service}
-                  characteristic_uuid: ${ble_tx}
+                  service_uuid: ${wrgb2_service}
+                  characteristic_uuid: ${wrgb2_tx}
                   value: !lambda return id(wrgb2_device).next();
               - delay: 200ms
         - switch.turn_off: wrgb2_verbinding
@@ -85,13 +135,29 @@ script:
       - delay: 1500ms
       - script.execute: wrgb2_verbind_als_klaar_manueel
 
+  # 4.5s i.p.v. 1.5s: CO2 (indien aanwezig) verbindt eerst
+  - id: wrgb2_schema_debounce
+    mode: restart
+    then:
+      - delay: 4500ms
+      - script.execute: wrgb2_verbind_als_klaar
+
+# Fotoperiode (schema-package) wijzigt → WRGB2-schema opnieuw pushen
+datetime:
+  - id: !extend fotoperiode_start
+    on_value:
+      - script.execute: wrgb2_schema_debounce
+  - id: !extend fotoperiode_eind
+    on_value:
+      - script.execute: wrgb2_schema_debounce
+
 
 switch:
   - platform: ble_client
     ble_client_id: chihiros_wrgb2
     id: wrgb2_verbinding
     internal: true
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_mode: ALWAYS_OFF
 
   - platform: template
     name: "WRGB2 auto modus"
@@ -221,8 +287,8 @@ sensor:
   - platform: ble_client
     type: characteristic
     ble_client_id: chihiros_wrgb2
-    service_uuid: ${ble_service}
-    characteristic_uuid: ${ble_rx}
+    service_uuid: ${wrgb2_service}
+    characteristic_uuid: ${wrgb2_rx}
     id: wrgb2_notificatie
     name: "WRGB2 Notificatie"
     notify: true

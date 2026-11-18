@@ -8,22 +8,27 @@
 #   2. RTC × 2         — klok tweemaal synchroniseren (app-gedrag)
 #   3. Extra auth [06] — ventilator-specifieke extra authenticatie
 #   4. Extra auth [08] — tweede ventilator-specifieke auth
-#   5. Mode init       — stuurt de opgeslagen silent-mode stand
-#   6. Drempel         — watertemperatuur start/max
-#   7. Snelheid        — 0 = device auto-modus (eigen thermostaat), >0 = handmatige override
-#   8. Wachten         — 2s wachten op notificaties van apparaat
-#   9. Disconnect
+#   5a. Aan, normaal   — drempel + mode 0x23,0x22 (auto-thermostaat) [+ snelheid als >0] + extra auth
+#   5b. Aan, silent    — 6× alternerend mode 0x22/0x23
+#   5c. Uit            — snelheid 0 (handmatig-uit, thermostaat uit)
+#   6. Wachten         — 2s wachten op notificaties van apparaat
+#   7. Disconnect
 #
 # Notificaties van het apparaat (byte-posities in het ontvangen frame):
-#   byte[5]       = ventilatorsnelheid (%)
+#   byte[5]       = GEEN live snelheid (bleef 0x25 bij stilstand én draaien, getest 2026-11-18)
 #   byte[6:7]/256 = kamertemperatuur (°C)
-#   byte[11]/10   = watertemperatuur (°C)
-#   byte[12]      = luchtvochtigheid (%)
+#   byte[10:11]/10 = watertemperatuur (°C, uint16 big-endian)
+#   byte[12]      = GEEN luchtvochtigheid (constant 0x22; kamer was 68%, getest 2026-11-18)
 #
 # VERBINDING: periodiek (elke 5 min) — verbindt voor temp-lezing, verbreekt daarna.
 # Ventilator regelt zichzelf o.b.v. temperatuurdrempels; BLE alleen voor monitoring en config.
 
 globals:
+  - id: ventilator_aan
+    type: bool
+    restore_value: true
+    initial_value: 'true'
+
   - id: ventilator_silent_mode
     type: bool
     restore_value: true
@@ -41,7 +46,7 @@ ble_client:
         - delay: 500ms
         - lambda: |-
             id(ventilator_device).prepare(
-              id(ntp_tijd).now(), id(ventilator_silent_mode),
+              id(ntp_tijd).now(), id(ventilator_aan), id(ventilator_silent_mode),
               (uint8_t)id(num_ventilator_start_temp).state,
               (uint8_t)id(num_ventilator_max_temp).state,
               (uint8_t)id(num_ventilator_snelheid).state
@@ -93,7 +98,25 @@ switch:
     ble_client_id: chihiros_ventilator
     id: ventilator_verbinding
     internal: true
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_mode: ALWAYS_OFF
+
+  # Aan = auto-thermostaat (start/max drempel), uit = handmatig snelheid 0.
+  # Bruikbaar in HA-scènes/automations; de 5-min poll houdt deze stand vast.
+  - platform: template
+    name: "Ventilator aan"
+    id: sw_ventilator_aan
+    icon: mdi:fan
+    lambda: return id(ventilator_aan);
+    turn_on_action:
+      - globals.set:
+          id: ventilator_aan
+          value: 'true'
+      - script.execute: ventilator_verbind_als_klaar
+    turn_off_action:
+      - globals.set:
+          id: ventilator_aan
+          value: 'false'
+      - script.execute: ventilator_verbind_als_klaar
 
   - platform: template
     name: "Ventilator silent mode"
@@ -174,12 +197,11 @@ sensor:
     internal: true
     unit_of_measurement: ""
     lambda: |-
+      ESP_LOGI("ventilator", "Notificatie (%d bytes): %s", (int)x.size(), chihiros::hex_dump(x).c_str());
       auto d = chihiros::parse_ventilator_notificatie(x);
       if (d.valid) {
-        id(sensor_ventilator_fan_speed).publish_state(d.fan_speed);
         if (d.kamer_temp > 0.0f && d.kamer_temp < 50.0f) id(sensor_ventilator_kamer_temp).publish_state(d.kamer_temp);
         if (d.water_temp > 0.0f && d.water_temp < 50.0f) id(sensor_ventilator_water_temp).publish_state(d.water_temp);
-        id(sensor_ventilator_humidity).publish_state(d.humidity);
       }
       return NAN;
 
@@ -200,19 +222,3 @@ sensor:
     state_class: measurement
     accuracy_decimals: 1
     icon: mdi:thermometer
-
-  - platform: template
-    id: sensor_ventilator_humidity
-    name: "Aquarium luchtvochtigheid"
-    unit_of_measurement: "%"
-    device_class: humidity
-    state_class: measurement
-    accuracy_decimals: 0
-
-  - platform: template
-    id: sensor_ventilator_fan_speed
-    name: "Ventilator snelheid"
-    unit_of_measurement: "%"
-    state_class: measurement
-    accuracy_decimals: 0
-    icon: mdi:fan

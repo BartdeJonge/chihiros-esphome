@@ -116,7 +116,7 @@ packages:
   dosing:     !include aquarium-ble-bridge-dosing.yaml
 ```
 
-`schema.yaml` defines the shared `fotoperiode_start` / `fotoperiode_eind` datetimes and the `co2_prestart` offset — used by both CO2 and WRGB2.
+`schema.yaml` defines the shared `fotoperiode_start` / `fotoperiode_eind` datetimes, required by CO2 and WRGB2. It references no device itself: the CO2 and WRGB2 packages hook into it with `!extend`, so either can be left out. `co2_prestart` lives in the CO2 package. A fan-only setup needs no `schema` package.
 
 ### Step 4 — Flash
 
@@ -160,6 +160,7 @@ This connect → configure → disconnect pattern is expected and correct. Avoid
 | Cooling Fan | Working ✅ |
 | Doctor Mate | Working ✅ |
 | WRGB II | Working ✅ |
+| WRGB II, old model (`DYWRGB…`) | RTC sync working ✅ (schedule push untested) |
 | Dosing Pump | Working ✅ |
 
 ---
@@ -264,7 +265,7 @@ on_connect:
 | Class | `prepare()` parameters |
 |---|---|
 | `CO2Device` | `time, schema_actief, fp_uur, fp_min, eind_uur, eind_min, prestart_min` |
-| `VentilatorDevice` | `time, silent_mode, start_temp, max_temp, speed` |
+| `VentilatorDevice` | `time, aan, silent_mode, start_temp, max_temp, speed` |
 | `DoctorDevice` | `time, tds_ppm, volume_l` |
 | `WRGB2Device` | `time, auto_modus, fp_start_h, fp_start_m, fp_eind_h, fp_eind_m, ramp_min, r, g, b` |
 | `DosingDevice` | `time, actief[4], weekdays[4], uur[4], min[4], vol[4]` |
@@ -442,7 +443,12 @@ toggle ch0 OFF  a5 01 0f 00 01 14 ff ff 00 ff ff ff ff ff ff ff e4
 
 > Protocol verified via btsnoop HCI analysis (2026-06-20).
 
-The fan has its own internal thermostat and regulates speed autonomously without BLE. The bridge connects every 5 minutes solely to read temperature/humidity notifications and to push updated threshold settings. **Do not send a FAN_SPEED command in auto mode** — the device interprets any explicit speed value (including 0) as a manual override that disables autonomous control.
+The fan has its own internal thermostat and regulates speed autonomously without BLE. The bridge connects every 5 minutes solely to read temperature notifications and to push updated threshold settings. **Do not send a FAN_SPEED command in auto mode** — the device interprets any explicit speed value (including 0) as a manual override that disables autonomous control.
+
+**On/off from Home Assistant** — the `Ventilator aan` switch (usable in scenes and automations) uses exactly that behaviour, and the 5-minute poll keeps the chosen state (verified on hardware 2026-11-18):
+
+- **on**: normal-mode sequence (thresholds + `0x23`, `0x22`) — the fan runs on its own thermostat
+- **off**: auth + RTC + extra auth, then `FAN_SPEED 0` — the fan stops, even above the start threshold
 
 ```mermaid
 sequenceDiagram
@@ -485,10 +491,10 @@ Sending only one mode command, or sending fan_speed=0 without the correct mode s
 
 | Byte | Value |
 |---|---|
-| `x[5]` | Fan speed (%) |
+| `x[5]` | **Not** live fan speed: stayed `0x25` (37) whether the fan was stopped or spinning (tested 2026-11-18). Meaning unknown. |
 | `x[6:7] / 256` | Room temperature (°C) |
 | `(x[10] << 8 \| x[11]) / 10` | Water temperature (°C) — **uint16 big-endian** |
-| `x[12]` | Humidity (%) |
+| `x[12]` | **Not** humidity: stayed `0x22` (34) while a room sensor read 68 % (tested 2026-11-18). Meaning unknown. |
 
 > Water temperature is a 2-byte big-endian uint16 divided by 10. Using only `x[11]` overflows at temperatures above 25.5°C (raw value > 255), producing wrong readings like 0.5°C for an actual 26.1°C.
 
@@ -571,6 +577,26 @@ Frames 3 and 4 are byte-identical except b2 — order determines meaning.
 ## WRGB II
 
 > Protocol verified via btsnoop HCI analysis (2026-05-30).
+
+### Old WRGB II (`DYWRGB…`)
+
+The old WRGB II uses the same frame format, but **not** the Nordic UART service. Its GATT table (verified 2026-11-18) is `0x1800`, `0x180A`, a Telink OTA service, `0xFFAA` and `0xFFE0`. Commands are written to and notifications come from the same characteristic, `FFE1`. Set in the substitutions:
+
+```yaml
+wrgb2_service: "0000ffe0-0000-1000-8000-00805f9b34fb"
+wrgb2_tx:      "0000ffe1-0000-1000-8000-00805f9b34fb"
+wrgb2_rx:      "0000ffe1-0000-1000-8000-00805f9b34fb"
+```
+
+The lamp echoes the RTC frame back (`5b 02 0b … 09 [yy mm wd hh mm ss] …`), which confirms the time was accepted. Schedule push (`a5/19`) has not been tested on this model; the reference implementation resets scenes with `5a/05 [0x28]` instead of `[0x07]`.
+
+### RTC maintenance
+
+The lamp loses its clock on power loss. The bridge sends an RTC-only sync (auth + RTC; the schedule is untouched):
+
+- on the first advertisement after the ESP boots, once NTP is valid
+- whenever the lamp reappears after not being seen for more than 2 minutes (power restored)
+- every 6 hours
 
 ```mermaid
 sequenceDiagram
