@@ -89,13 +89,18 @@ public:
 // ── Koelventilator ───────────────────────────────────────────────────────────
 class VentilatorDevice : public CommandQueue {
 public:
-    void prepare(esphome::ESPTime time, bool silent_mode,
+    void prepare(esphome::ESPTime time, bool aan, bool silent_mode,
                  uint8_t start_temp, uint8_t max_temp, uint8_t speed) {
         clear();
         push_auth_rtc_twice(time);
         push(auth_ext1(seq()));
         push(auth_ext2(seq()));
-        if (!silent_mode) {
+        if (!aan) {
+            // Uit: expliciete snelheid 0 = handmatig-uit, thermostaat uitgeschakeld
+            push(fan_speed(0, seq()));
+            return;
+        }
+        if (silent_mode) {
             // Silent: 6× alternerende mode-commando's, geen thresh/speed/final-auth
             for (int i = 0; i < 3; i++) {
                 push(set_mode(data::SILENT_ON,  seq()));

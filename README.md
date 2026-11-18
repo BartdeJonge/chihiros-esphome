@@ -264,7 +264,7 @@ on_connect:
 | Class | `prepare()` parameters |
 |---|---|
 | `CO2Device` | `time, schema_actief, fp_uur, fp_min, eind_uur, eind_min, prestart_min` |
-| `VentilatorDevice` | `time, silent_mode, start_temp, max_temp, speed` |
+| `VentilatorDevice` | `time, aan, silent_mode, start_temp, max_temp, speed` |
 | `DoctorDevice` | `time, tds_ppm, volume_l` |
 | `WRGB2Device` | `time, auto_modus, fp_start_h, fp_start_m, fp_eind_h, fp_eind_m, ramp_min, r, g, b` |
 | `DosingDevice` | `time, actief[4], weekdays[4], uur[4], min[4], vol[4]` |
@@ -442,7 +442,12 @@ toggle ch0 OFF  a5 01 0f 00 01 14 ff ff 00 ff ff ff ff ff ff ff e4
 
 > Protocol verified via btsnoop HCI analysis (2026-06-20).
 
-The fan has its own internal thermostat and regulates speed autonomously without BLE. The bridge connects every 5 minutes solely to read temperature/humidity notifications and to push updated threshold settings. **Do not send a FAN_SPEED command in auto mode** — the device interprets any explicit speed value (including 0) as a manual override that disables autonomous control.
+The fan has its own internal thermostat and regulates speed autonomously without BLE. The bridge connects every 5 minutes solely to read temperature notifications and to push updated threshold settings. **Do not send a FAN_SPEED command in auto mode** — the device interprets any explicit speed value (including 0) as a manual override that disables autonomous control.
+
+**On/off from Home Assistant** — the `Ventilator aan` switch (usable in scenes and automations) uses exactly that behaviour, and the 5-minute poll keeps the chosen state (verified on hardware 2026-11-18):
+
+- **on**: normal-mode sequence (thresholds + `0x23`, `0x22`) — the fan runs on its own thermostat
+- **off**: auth + RTC + extra auth, then `FAN_SPEED 0` — the fan stops, even above the start threshold
 
 ```mermaid
 sequenceDiagram
