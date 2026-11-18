@@ -160,6 +160,7 @@ This connect → configure → disconnect pattern is expected and correct. Avoid
 | Cooling Fan | Working ✅ |
 | Doctor Mate | Working ✅ |
 | WRGB II | Working ✅ |
+| WRGB II, old model (`DYWRGB…`) | RTC sync working ✅ (schedule push untested) |
 | Dosing Pump | Working ✅ |
 
 ---
@@ -576,6 +577,26 @@ Frames 3 and 4 are byte-identical except b2 — order determines meaning.
 ## WRGB II
 
 > Protocol verified via btsnoop HCI analysis (2026-05-30).
+
+### Old WRGB II (`DYWRGB…`)
+
+The old WRGB II uses the same frame format, but **not** the Nordic UART service. Its GATT table (verified 2026-11-18) is `0x1800`, `0x180A`, a Telink OTA service, `0xFFAA` and `0xFFE0`. Commands are written to and notifications come from the same characteristic, `FFE1`. Set in the substitutions:
+
+```yaml
+wrgb2_service: "0000ffe0-0000-1000-8000-00805f9b34fb"
+wrgb2_tx:      "0000ffe1-0000-1000-8000-00805f9b34fb"
+wrgb2_rx:      "0000ffe1-0000-1000-8000-00805f9b34fb"
+```
+
+The lamp echoes the RTC frame back (`5b 02 0b … 09 [yy mm wd hh mm ss] …`), which confirms the time was accepted. Schedule push (`a5/19`) has not been tested on this model; the reference implementation resets scenes with `5a/05 [0x28]` instead of `[0x07]`.
+
+### RTC maintenance
+
+The lamp loses its clock on power loss. The bridge sends an RTC-only sync (auth + RTC; the schedule is untouched):
+
+- on the first advertisement after the ESP boots, once NTP is valid
+- whenever the lamp reappears after not being seen for more than 2 minutes (power restored)
+- every 6 hours
 
 ```mermaid
 sequenceDiagram
