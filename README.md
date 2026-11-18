@@ -116,7 +116,7 @@ packages:
   dosing:     !include aquarium-ble-bridge-dosing.yaml
 ```
 
-`schema.yaml` defines the shared `fotoperiode_start` / `fotoperiode_eind` datetimes and the `co2_prestart` offset — used by both CO2 and WRGB2.
+`schema.yaml` defines the shared `fotoperiode_start` / `fotoperiode_eind` datetimes, required by CO2 and WRGB2. It references no device itself: the CO2 and WRGB2 packages hook into it with `!extend`, so either can be left out. `co2_prestart` lives in the CO2 package. A fan-only setup needs no `schema` package.
 
 ### Step 4 — Flash
 

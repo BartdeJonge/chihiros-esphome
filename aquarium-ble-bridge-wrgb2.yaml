@@ -135,6 +135,22 @@ script:
       - delay: 1500ms
       - script.execute: wrgb2_verbind_als_klaar_manueel
 
+  # 4.5s i.p.v. 1.5s: CO2 (indien aanwezig) verbindt eerst
+  - id: wrgb2_schema_debounce
+    mode: restart
+    then:
+      - delay: 4500ms
+      - script.execute: wrgb2_verbind_als_klaar
+
+# Fotoperiode (schema-package) wijzigt → WRGB2-schema opnieuw pushen
+datetime:
+  - id: !extend fotoperiode_start
+    on_value:
+      - script.execute: wrgb2_schema_debounce
+  - id: !extend fotoperiode_eind
+    on_value:
+      - script.execute: wrgb2_schema_debounce
+
 
 switch:
   - platform: ble_client

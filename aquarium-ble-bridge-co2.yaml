@@ -61,6 +61,36 @@ script:
           then:
             - switch.turn_on: co2_verbinding
 
+  - id: co2_schema_debounce
+    mode: restart
+    then:
+      - delay: 1500ms
+      - script.execute: co2_verbind_als_klaar
+
+# Fotoperiode (schema-package) wijzigt → CO2-schema opnieuw pushen
+datetime:
+  - id: !extend fotoperiode_start
+    on_value:
+      - script.execute: co2_schema_debounce
+  - id: !extend fotoperiode_eind
+    on_value:
+      - script.execute: co2_schema_debounce
+
+number:
+  - platform: template
+    id: co2_prestart
+    name: "CO2 prestart"
+    min_value: 0
+    max_value: 180
+    step: 5
+    initial_value: 90
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: "min"
+    icon: mdi:clock-minus
+    on_value:
+      - script.execute: co2_schema_debounce
+
 switch:
   - platform: ble_client
     ble_client_id: chihiros_co2

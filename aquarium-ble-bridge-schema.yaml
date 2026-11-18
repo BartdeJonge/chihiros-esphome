@@ -6,25 +6,9 @@
 #   WRGB2 aan: fotoperiode_start
 #   WRGB2 uit: fotoperiode_eind
 #
-# Wijziging triggert schema_debounce_beide (CO2 eerst, WRGB2 na 3s).
-# Gespreide verbinding voorkomt gelijktijdige BLE-connects (HCI 0x07).
-
-script:
-  # Beide devices bijwerken — gespreide verbinding
-  - id: schema_debounce_beide
-    mode: restart
-    then:
-      - delay: 1500ms
-      - script.execute: co2_verbind_als_klaar
-      - delay: 3000ms
-      - script.execute: wrgb2_verbind_als_klaar
-
-  # Alleen CO2 bijwerken (co2_prestart wijziging)
-  - id: schema_debounce_co2
-    mode: restart
-    then:
-      - delay: 1500ms
-      - script.execute: co2_verbind_als_klaar
+# Dit package verwijst naar geen enkel device: CO2 en WRGB2 haken zelf in op
+# on_value via `!extend` (elk met eigen debounce), zodat beide optioneel zijn.
+# Gespreide debounce (CO2 1.5s, WRGB2 4.5s) voorkomt gelijktijdige BLE-connects (HCI 0x07).
 
 datetime:
   - platform: template
@@ -35,8 +19,6 @@ datetime:
     restore_value: true
     initial_value: "14:00:00"
     icon: mdi:weather-sunset-up
-    on_value:
-      - script.execute: schema_debounce_beide
 
   - platform: template
     id: fotoperiode_eind
@@ -46,20 +28,3 @@ datetime:
     restore_value: true
     initial_value: "21:00:00"
     icon: mdi:weather-sunset-down
-    on_value:
-      - script.execute: schema_debounce_beide
-
-number:
-  - platform: template
-    id: co2_prestart
-    name: "CO2 prestart"
-    min_value: 0
-    max_value: 180
-    step: 5
-    initial_value: 90
-    restore_value: true
-    optimistic: true
-    unit_of_measurement: "min"
-    icon: mdi:clock-minus
-    on_value:
-      - script.execute: schema_debounce_co2
