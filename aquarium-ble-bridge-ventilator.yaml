@@ -15,10 +15,10 @@
 #   7. Disconnect
 #
 # Notificaties van het apparaat (byte-posities in het ontvangen frame):
-#   byte[5]       = ventilatorsnelheid (%)
+#   byte[5]       = GEEN live snelheid (bleef 0x25 bij stilstand én draaien, getest 2026-11-18)
 #   byte[6:7]/256 = kamertemperatuur (°C)
-#   byte[11]/10   = watertemperatuur (°C)
-#   byte[12]      = luchtvochtigheid (%)
+#   byte[10:11]/10 = watertemperatuur (°C, uint16 big-endian)
+#   byte[12]      = GEEN luchtvochtigheid (constant 0x22; kamer was 68%, getest 2026-11-18)
 #
 # VERBINDING: periodiek (elke 5 min) — verbindt voor temp-lezing, verbreekt daarna.
 # Ventilator regelt zichzelf o.b.v. temperatuurdrempels; BLE alleen voor monitoring en config.
@@ -197,12 +197,11 @@ sensor:
     internal: true
     unit_of_measurement: ""
     lambda: |-
+      ESP_LOGI("ventilator", "Notificatie (%d bytes): %s", (int)x.size(), chihiros::hex_dump(x).c_str());
       auto d = chihiros::parse_ventilator_notificatie(x);
       if (d.valid) {
-        id(sensor_ventilator_fan_speed).publish_state(d.fan_speed);
         if (d.kamer_temp > 0.0f && d.kamer_temp < 50.0f) id(sensor_ventilator_kamer_temp).publish_state(d.kamer_temp);
         if (d.water_temp > 0.0f && d.water_temp < 50.0f) id(sensor_ventilator_water_temp).publish_state(d.water_temp);
-        id(sensor_ventilator_humidity).publish_state(d.humidity);
       }
       return NAN;
 
@@ -223,19 +222,3 @@ sensor:
     state_class: measurement
     accuracy_decimals: 1
     icon: mdi:thermometer
-
-  - platform: template
-    id: sensor_ventilator_humidity
-    name: "Aquarium luchtvochtigheid"
-    unit_of_measurement: "%"
-    device_class: humidity
-    state_class: measurement
-    accuracy_decimals: 0
-
-  - platform: template
-    id: sensor_ventilator_fan_speed
-    name: "Ventilator snelheid"
-    unit_of_measurement: "%"
-    state_class: measurement
-    accuracy_decimals: 0
-    icon: mdi:fan

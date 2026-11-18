@@ -491,10 +491,10 @@ Sending only one mode command, or sending fan_speed=0 without the correct mode s
 
 | Byte | Value |
 |---|---|
-| `x[5]` | Fan speed (%) |
+| `x[5]` | **Not** live fan speed: stayed `0x25` (37) whether the fan was stopped or spinning (tested 2026-11-18). Meaning unknown. |
 | `x[6:7] / 256` | Room temperature (°C) |
 | `(x[10] << 8 \| x[11]) / 10` | Water temperature (°C) — **uint16 big-endian** |
-| `x[12]` | Humidity (%) |
+| `x[12]` | **Not** humidity: stayed `0x22` (34) while a room sensor read 68 % (tested 2026-11-18). Meaning unknown. |
 
 > Water temperature is a 2-byte big-endian uint16 divided by 10. Using only `x[11]` overflows at temperatures above 25.5°C (raw value > 255), producing wrong readings like 0.5°C for an actual 26.1°C.
 
