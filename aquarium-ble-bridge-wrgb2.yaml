@@ -157,7 +157,7 @@ switch:
     ble_client_id: chihiros_wrgb2
     id: wrgb2_verbinding
     internal: true
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_mode: ALWAYS_OFF
 
   - platform: template
     name: "WRGB2 auto modus"

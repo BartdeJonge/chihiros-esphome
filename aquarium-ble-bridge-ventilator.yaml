@@ -98,7 +98,7 @@ switch:
     ble_client_id: chihiros_ventilator
     id: ventilator_verbinding
     internal: true
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_mode: ALWAYS_OFF
 
   # Aan = auto-thermostaat (start/max drempel), uit = handmatig snelheid 0.
   # Bruikbaar in HA-scènes/automations; de 5-min poll houdt deze stand vast.
