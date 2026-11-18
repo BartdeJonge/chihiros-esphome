@@ -81,7 +81,10 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    # Encryption hergebruikt de api-sleutel (geen apart OTA-wachtwoord meer).
+    # Migratie vanaf firmware met OTA-wachtwoord: eenmalig `password: !secret ota_password`
+    # plus `allow_plaintext_upload: true` onder encryption, daarna beide weer weghalen.
+    encryption:
 
 time:
   - platform: sntp
